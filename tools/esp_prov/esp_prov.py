@@ -177,7 +177,7 @@ async def custom_config(tp, sec, custom_info, custom_ver):
 async def custom_data(tp, sec, custom_data):
     try:
         message = prov.custom_data_request(sec, custom_data)
-        response = await tp.send_data('custom-data', message)
+        response = await tp.send_data('web-server-url', message)
         return (prov.custom_data_response(sec, response) == 0)
     except RuntimeError as e:
         on_except(e)
