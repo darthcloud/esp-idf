@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -16,6 +16,7 @@
 #include "sdkconfig.h"
 #include "esp_tls.h"
 #include "esp_tls_private.h"
+#include "esp_tls_platform_port.h"
 #include "esp_tls_error_capture_internal.h"
 #include <fcntl.h>
 #include <errno.h>
@@ -72,6 +73,8 @@ static const char *TAG = "esp-tls";
 #define _esp_tls_free_client_session        esp_mbedtls_free_client_session
 #define _esp_tls_get_ssl_context            esp_mbedtls_get_ssl_context
 #define _esp_tls_server_session_create      esp_mbedtls_server_session_create
+#define _esp_tls_server_session_init        esp_mbedtls_server_session_init
+#define _esp_tls_server_session_continue_async     esp_mbedtls_server_session_continue_async
 #define _esp_tls_server_session_delete      esp_mbedtls_server_session_delete
 #define _esp_tls_server_session_ticket_ctx_init    esp_mbedtls_server_session_ticket_ctx_init
 #define _esp_tls_server_session_ticket_ctx_free    esp_mbedtls_server_session_ticket_ctx_free
@@ -131,7 +134,7 @@ static ssize_t tcp_write(esp_tls_t *tls, const char *data, size_t datalen)
 
 ssize_t esp_tls_conn_read(esp_tls_t *tls, void  *data, size_t datalen)
 {
-    if (!tls || !data) {
+    if (!tls) {
         return -1;
     }
     return tls->read(tls, (char *)data, datalen);
@@ -375,7 +378,15 @@ static inline esp_err_t tcp_connect(const char *host, int hostlen, int port, con
 
     ret = ESP_ERR_ESP_TLS_FAILED_CONNECT_TO_HOST;
     ESP_LOGD(TAG, "[sock=%d] Connecting to server. HOST: %s, Port: %d", fd, host, port);
-    if (connect(fd, (struct sockaddr *)&address, sizeof(struct sockaddr)) < 0) {
+#if IPV4_ENABLED && IPV6_ENABLED
+    socklen_t addr_len = (address.ss_family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
+#elif IPV6_ENABLED
+    socklen_t addr_len = sizeof(struct sockaddr_in6);
+#else
+    /* IPv4 only */
+    socklen_t addr_len = sizeof(struct sockaddr_in);
+#endif
+    if (connect(fd, (struct sockaddr *)&address, addr_len) < 0) {
         if (errno == EINPROGRESS) {
             fd_set fdset;
             struct timeval tv = { .tv_usec = 0, .tv_sec = ESP_TLS_DEFAULT_CONN_TIMEOUT }; // Default connection timeout is 10 s
@@ -537,9 +548,8 @@ int esp_tls_conn_new_sync(const char *hostname, int hostlen, int port, const esp
     if (!cfg || !tls || !hostname || hostlen < 0) {
         return -1;
     }
-    struct timeval time = {};
-    gettimeofday(&time, NULL);
-    uint32_t start_time_ms = (time.tv_sec * 1000) + (time.tv_usec / 1000);
+    uint64_t start_time_us;
+    start_time_us = esp_tls_get_platform_time();
     while (1) {
         int ret = esp_tls_low_level_conn(hostname, hostlen, port, cfg, tls);
         if (ret == 1) {
@@ -548,10 +558,8 @@ int esp_tls_conn_new_sync(const char *hostname, int hostlen, int port, const esp
             ESP_LOGE(TAG, "Failed to open new connection");
             return -1;
         } else if (ret == 0 && cfg->timeout_ms >= 0) {
-            gettimeofday(&time, NULL);
-            uint32_t current_time_ms = (time.tv_sec * 1000) + (time.tv_usec / 1000);
-            uint32_t elapsed_time_ms = current_time_ms - start_time_ms;
-            if (elapsed_time_ms >= cfg->timeout_ms) {
+            uint64_t elapsed_time_us = esp_tls_get_platform_time() - start_time_us;
+            if ((elapsed_time_us / 1000) >= cfg->timeout_ms) {
                 ESP_LOGW(TAG, "Failed to open new connection in specified timeout");
                 ESP_INT_EVENT_TRACKER_CAPTURE(tls->error_handle, ESP_TLS_ERR_TYPE_ESP, ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT);
                 return 0;
@@ -654,6 +662,17 @@ const int *esp_tls_get_ciphersuites_list(void)
 {
     return _esp_tls_get_ciphersuites_list();
 }
+
+esp_err_t esp_tls_server_session_init(esp_tls_cfg_server_t *cfg, int sockfd, esp_tls_t *tls)
+{
+    return _esp_tls_server_session_init(cfg, sockfd, tls);
+}
+
+int esp_tls_server_session_continue_async(esp_tls_t *tls)
+{
+    return _esp_tls_server_session_continue_async(tls);
+}
+
 #endif /* CONFIG_ESP_TLS_USING_MBEDTLS */
 
 #ifdef CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS
@@ -705,6 +724,7 @@ int esp_tls_server_session_create(esp_tls_cfg_server_t *cfg, int sockfd, esp_tls
 {
     return _esp_tls_server_session_create(cfg, sockfd, tls);
 }
+
 /**
  * @brief      Close the server side TLS/SSL connection and free any allocated resources.
  */

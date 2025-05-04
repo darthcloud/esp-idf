@@ -5,11 +5,14 @@
  */
 
 #include "sdkconfig.h"
+#include "soc/soc_caps.h"
 #include "ulp_lp_core_i2c.h"
 #include "ulp_lp_core_utils.h"
 #include "soc/lp_i2c_reg.h"
 #include "soc/i2c_struct.h"
 #include "hal/i2c_ll.h"
+
+#if SOC_LP_I2C_SUPPORTED
 
 #define LP_I2C_FIFO_LEN     SOC_LP_I2C_FIFO_LEN
 #define LP_I2C_READ_MODE    I2C_MASTER_READ
@@ -19,9 +22,8 @@
 
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
-#if !CONFIG_IDF_TARGET_ESP32P4  // # Add to P4 TODO IDF-7540
-
 /* I2C LL context */
+
 i2c_dev_t *dev = I2C_LL_GET_HW(LP_I2C_NUM_0);
 
 /* ACK check enable control variable. Enabled by default */
@@ -213,7 +215,7 @@ esp_err_t lp_core_i2c_master_read_from_device(i2c_port_t lp_i2c_num, uint16_t de
 
         /* Initiate I2C transfer */
         i2c_ll_update(dev);
-        i2c_ll_master_trans_start(dev);
+        i2c_ll_start_trans(dev);
 
         /* Wait for the transfer to complete */
         ret = lp_core_i2c_wait_for_interrupt(intr_mask, ticks_to_wait);
@@ -304,7 +306,7 @@ esp_err_t lp_core_i2c_master_write_to_device(i2c_port_t lp_i2c_num, uint16_t dev
 
         /* Initiate I2C transfer */
         i2c_ll_update(dev);
-        i2c_ll_master_trans_start(dev);
+        i2c_ll_start_trans(dev);
 
         /* Wait for the transfer to complete */
         ret = lp_core_i2c_wait_for_interrupt(intr_mask, ticks_to_wait);
@@ -391,7 +393,7 @@ esp_err_t lp_core_i2c_master_write_read_device(i2c_port_t lp_i2c_num, uint16_t d
 
         /* Initiate I2C transfer */
         i2c_ll_update(dev);
-        i2c_ll_master_trans_start(dev);
+        i2c_ll_start_trans(dev);
 
         /* Wait for the transfer to complete */
         ret = lp_core_i2c_wait_for_interrupt(intr_mask, ticks_to_wait);
@@ -460,7 +462,7 @@ esp_err_t lp_core_i2c_master_write_read_device(i2c_port_t lp_i2c_num, uint16_t d
 
         /* Initiate I2C transfer */
         i2c_ll_update(dev);
-        i2c_ll_master_trans_start(dev);
+        i2c_ll_start_trans(dev);
 
         /* Wait for the transfer to complete */
         ret = lp_core_i2c_wait_for_interrupt(intr_mask, ticks_to_wait);
@@ -479,4 +481,4 @@ esp_err_t lp_core_i2c_master_write_read_device(i2c_port_t lp_i2c_num, uint16_t d
     return ret;
 }
 
-#endif //!CONFIG_IDF_TARGET_ESP32P4
+#endif /* SOC_LP_I2C_SUPPORTED */

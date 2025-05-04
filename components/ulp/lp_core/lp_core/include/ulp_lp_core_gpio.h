@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,6 +10,7 @@
 extern "C" {
 #endif
 
+#include "soc/soc_caps.h"
 #include "hal/gpio_types.h"
 #include "hal/rtc_io_ll.h"
 
@@ -25,15 +26,41 @@ typedef enum {
     LP_IO_NUM_5 = 5,     /*!< GPIO5, input and output */
     LP_IO_NUM_6 = 6,     /*!< GPIO6, input and output */
     LP_IO_NUM_7 = 7,     /*!< GPIO7, input and output */
+#if SOC_RTCIO_PIN_COUNT > 8
+    LP_IO_NUM_8 = 8,     /*!< GPIO8, input and output */
+    LP_IO_NUM_9 = 9,     /*!< GPIO9, input and output */
+    LP_IO_NUM_10 = 10,   /*!< GPIO10, input and output */
+    LP_IO_NUM_11 = 11,   /*!< GPIO11, input and output */
+    LP_IO_NUM_12 = 12,   /*!< GPIO12, input and output */
+    LP_IO_NUM_13 = 13,   /*!< GPIO13, input and output */
+    LP_IO_NUM_14 = 14,   /*!< GPIO14, input and output */
+    LP_IO_NUM_15 = 15,   /*!< GPIO15, input and output */
+#endif
 } lp_io_num_t;
+
+/** @cond */
+/// for backward compatible
+typedef gpio_int_type_t lp_io_intr_type_t;
+#define LP_IO_INTR_DISABLE GPIO_INTR_DISABLE
+#define LP_IO_INTR_POSEDGE GPIO_INTR_POSEDGE
+#define LP_IO_INTR_NEGEDGE GPIO_INTR_NEGEDGE
+#define LP_IO_INTR_ANYEDGE GPIO_INTR_ANYEDGE
+#define LP_IO_INTR_LOW_LEVEL GPIO_INTR_LOW_LEVEL
+#define LP_IO_INTR_HIGH_LEVEL GPIO_INTR_HIGH_LEVEL
+/** @endcond */
 
 /**
  * @brief Initialize a rtcio pin
+ * @note If IO is used in LP application, `rtc_gpio_init` must be called at least once
+ *       for the using IO before loading LP core firmware in HP Code.
  *
  * @param lp_io_num The rtc io pin to initialize
  */
 static inline void ulp_lp_core_gpio_init(lp_io_num_t lp_io_num)
 {
+#if SOC_LP_IO_CLOCK_IS_INDEPENDENT
+    _rtcio_ll_enable_io_clock(true);
+#endif
     rtcio_ll_function_select(lp_io_num, RTCIO_LL_FUNC_RTC);
 }
 
@@ -151,6 +178,47 @@ static inline void ulp_lp_core_gpio_pulldown_disable(lp_io_num_t lp_io_num)
 {
     /* Enable internal weak pull-down */
     rtcio_ll_pulldown_disable(lp_io_num);
+}
+
+/**
+ * @brief Enable interrupt for lp io pin
+ *
+ * @param lp_io_num The lp io pin to enable interrupt for
+ * @param intr_type The interrupt type to enable
+ */
+static inline void ulp_lp_core_gpio_intr_enable(lp_io_num_t lp_io_num, gpio_int_type_t intr_type)
+{
+    rtcio_ll_intr_enable(lp_io_num, intr_type);
+}
+
+/**
+ * @brief Clear interrupt status for all lp io
+ *
+ */
+static inline void ulp_lp_core_gpio_clear_intr_status(void)
+{
+    rtcio_ll_clear_interrupt_status();
+}
+
+/**
+ * @brief Enable wake up for lp io pin
+ *
+ * @param lp_io_num The lp io pin to enable the wake up for
+ * @param intr_type The interrupt type to enable wake up for
+ */
+static inline void ulp_lp_core_gpio_wakeup_enable(lp_io_num_t lp_io_num, gpio_int_type_t intr_type)
+{
+    rtcio_ll_wakeup_enable(lp_io_num, intr_type);
+}
+
+/**
+ * @brief Disable wake up for lp io pin
+ *
+ * @param lp_io_num The lp io pin to disable the wake up for
+ */
+static inline void ulp_lp_core_gpio_wakeup_disable(lp_io_num_t lp_io_num)
+{
+    rtcio_ll_wakeup_disable(lp_io_num);
 }
 
 #ifdef __cplusplus

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -26,7 +26,6 @@
 #include "esp_private/esp_clk.h"
 #include "bootloader_clock.h"
 #include "soc/syscon_reg.h"
-#include "hal/clk_gate_ll.h"
 
 static const char *TAG = "clk";
 
@@ -60,7 +59,7 @@ typedef enum {
 
 static void select_rtc_slow_clk(slow_clk_sel_t slow_clk);
 
-__attribute__((weak)) void esp_clk_init(void)
+void esp_rtc_init(void)
 {
     rtc_config_t cfg = RTC_CONFIG_DEFAULT();
     soc_reset_reason_t rst_reas = esp_rom_get_reset_reason(0);
@@ -74,7 +73,10 @@ __attribute__((weak)) void esp_clk_init(void)
         }
     }
     rtc_init(cfg);
+}
 
+__attribute__((weak)) void esp_clk_init(void)
+{
     bool rc_fast_d256_is_enabled = rtc_clk_8md256_enabled();
     rtc_clk_8m_enable(true, rc_fast_d256_is_enabled);
     rtc_clk_fast_src_set(SOC_RTC_FAST_CLK_SRC_RC_FAST);
@@ -177,7 +179,10 @@ static void select_rtc_slow_clk(slow_clk_sel_t slow_clk)
             rtc_clk_8m_enable(true, true);
         }
         rtc_clk_slow_src_set(rtc_slow_clk_src);
-
+        if (rtc_slow_clk_src != SOC_RTC_SLOW_CLK_SRC_XTAL32K) {
+            rtc_clk_32k_enable(false);
+            rtc_clk_32k_disable_external();
+        }
         if (SLOW_CLK_CAL_CYCLES > 0) {
             /* TODO: 32k XTAL oscillator has some frequency drift at startup.
              * Improve calibration routine to wait until the frequency is stable.
@@ -188,7 +193,7 @@ static void select_rtc_slow_clk(slow_clk_sel_t slow_clk)
             cal_val = (uint32_t)(cal_dividend / rtc_clk_slow_freq_get_hz());
         }
     } while (cal_val == 0);
-    ESP_EARLY_LOGD(TAG, "RTC_SLOW_CLK calibration value: %d", cal_val);
+    ESP_EARLY_LOGD(TAG, "RTC_SLOW_CLK calibration value: %" PRIu32, cal_val);
     esp_clk_slowclk_cal_set(cal_val);
 }
 
@@ -238,7 +243,6 @@ __attribute__((weak)) void esp_perip_clk_init(void)
                            DPORT_PWM0_CLK_EN |
                            DPORT_TWAI_CLK_EN |
                            DPORT_PWM1_CLK_EN |
-                           DPORT_I2S1_CLK_EN |
                            DPORT_SPI2_DMA_CLK_EN |
                            DPORT_SPI3_DMA_CLK_EN |
                            DPORT_PWM2_CLK_EN |
@@ -274,7 +278,6 @@ __attribute__((weak)) void esp_perip_clk_init(void)
                         DPORT_UHCI1_CLK_EN |
                         DPORT_SPI3_CLK_EN |
                         DPORT_I2C_EXT1_CLK_EN |
-                        DPORT_I2S1_CLK_EN |
                         DPORT_SPI2_DMA_CLK_EN |
                         DPORT_SPI3_DMA_CLK_EN;
     common_perip_clk1 = 0;

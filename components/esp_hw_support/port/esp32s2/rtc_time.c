@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -116,7 +116,7 @@ static uint32_t rtc_clk_cal_internal_cycling(rtc_cal_sel_t cal_clk, uint32_t slo
 }
 
 /**
- * @brief Slowclk period calculating funtion used by rtc_clk_cal and rtc_clk_cal_cycling
+ * @brief Slowclk period calculating function used by rtc_clk_cal and rtc_clk_cal_cycling
  * @param xtal_cycles number of xtal cycles count
  * @param slowclk_cycles number of slow clock cycles to count
  * @return slow clock period
@@ -140,7 +140,7 @@ static uint32_t rtc_clk_xtal_to_slowclk(uint64_t xtal_cycles, uint32_t slowclk_c
 uint32_t rtc_clk_cal_internal(rtc_cal_sel_t cal_clk, uint32_t slowclk_cycles, uint32_t cal_mode)
 {
     /* On ESP32S2, choosing RTC_CAL_RTC_MUX results in calibration of
-     * the 90k RTC clock regardless of the currenlty selected SLOW_CLK.
+     * the 90k RTC clock regardless of the currently selected SLOW_CLK.
      * On the ESP32, it used the currently selected SLOW_CLK.
      * The following code emulates ESP32 behavior:
      */
@@ -227,9 +227,9 @@ uint32_t rtc_clk_cal_cycling(rtc_cal_sel_t cal_clk, uint32_t slowclk_cycles)
 uint64_t rtc_time_us_to_slowclk(uint64_t time_in_us, uint32_t period)
 {
     assert(period);
-    /* Overflow will happen in this function if time_in_us >= 2^45, which is about 400 days.
-     * TODO: fix overflow.
-     */
+    if (time_in_us > (UINT64_MAX >> RTC_CLK_CAL_FRACT)) {
+        return ((time_in_us / period) << RTC_CLK_CAL_FRACT) + ((time_in_us % period) << RTC_CLK_CAL_FRACT) / period;
+    }
     return (time_in_us << RTC_CLK_CAL_FRACT) / period;
 }
 
@@ -259,6 +259,8 @@ uint32_t rtc_clk_freq_cal(uint32_t cal_val)
     return 1000000ULL * (1 << RTC_CLK_CAL_FRACT) / cal_val;
 }
 
+uint32_t rtc_clk_freq_to_period(uint32_t) __attribute__((alias("rtc_clk_freq_cal")));
+
 /// @brief if the calibration is used, we need to enable the timer group0 first
 __attribute__((constructor))
 static void enable_timer_group0_for_calibration(void)
@@ -271,9 +273,7 @@ static void enable_timer_group0_for_calibration(void)
         }
     }
 #else
-    // no critical section is needed for bootloader
-    int __DECLARE_RCC_RC_ATOMIC_ENV;
-    timer_ll_enable_bus_clock(0, true);
-    timer_ll_reset_register(0);
+    _timer_ll_enable_bus_clock(0, true);
+    _timer_ll_reset_register(0);
 #endif
 }

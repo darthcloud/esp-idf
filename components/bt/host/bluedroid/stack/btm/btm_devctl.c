@@ -81,7 +81,10 @@ void btm_dev_init (void)
 
     /* Initialize nonzero defaults */
 #if (BTM_MAX_LOC_BD_NAME_LEN > 0)
-    memset(btm_cb.cfg.bd_name, 0, sizeof(tBTM_LOC_BD_NAME));
+    memset(btm_cb.cfg.ble_bd_name, 0, sizeof(tBTM_LOC_BD_NAME));
+#if (CLASSIC_BT_INCLUDED == TRUE)
+    memset(btm_cb.cfg.bredr_bd_name, 0, sizeof(tBTM_LOC_BD_NAME));
+#endif // #if (CLASSIC_BT_INCLUDED == TRUE)
 #endif
 
     btm_cb.devcb.reset_timer.param  = (TIMER_PARAM_TYPE)TT_DEV_RESET;
@@ -168,8 +171,12 @@ static void reset_complete(void)
     btm_cb.ble_ctr_cb.conn_state = BLE_CONN_IDLE;
     btm_cb.ble_ctr_cb.bg_conn_type = BTM_BLE_CONN_NONE;
     btm_cb.ble_ctr_cb.p_select_cback = NULL;
+#if (tGATT_BG_CONN_DEV == TRUE)
     gatt_reset_bgdev_list();
+#endif // #if (tGATT_BG_CONN_DEV == TRUE)
+#if (BLE_HOST_BLE_MULTI_ADV_EN == TRUE)
     btm_ble_multi_adv_init();
+#endif // #if (BLE_HOST_BLE_MULTI_ADV_EN == TRUE)
 #endif
 
     btm_pm_reset();
@@ -192,6 +199,9 @@ static void reset_complete(void)
 
     if (controller->supports_ble()) {
         btm_ble_white_list_init(controller->get_ble_white_list_size());
+        #if (BLE_50_EXTEND_SYNC_EN == TRUE)
+        btm_ble_periodic_adv_list_init(controller->get_ble_periodic_adv_list_size());
+        #endif //#if (BLE_50_EXTEND_SYNC_EN == TRUE)
         l2c_link_processs_ble_num_bufs(controller->get_acl_buffer_count_ble());
     }
 #endif
@@ -449,11 +459,11 @@ static void btm_decode_ext_features_page (UINT8 page_number, const BD_FEATURES p
 ** Returns          status of the operation
 **
 *******************************************************************************/
-tBTM_STATUS BTM_SetLocalDeviceName (char *p_name)
+tBTM_STATUS BTM_SetLocalDeviceName (char *p_name, tBT_DEVICE_TYPE name_type)
 {
     UINT8    *p;
 
-    if (!p_name || !p_name[0] || (strlen ((char *)p_name) > BD_NAME_LEN)) {
+    if (!p_name || !p_name[0] || (strlen ((char *)p_name) > BD_NAME_LEN) || (name_type > BT_DEVICE_TYPE_DUMO)) {
         return (BTM_ILLEGAL_VALUE);
     }
 
@@ -463,16 +473,27 @@ tBTM_STATUS BTM_SetLocalDeviceName (char *p_name)
 
 #if BTM_MAX_LOC_BD_NAME_LEN > 0
     /* Save the device name if local storage is enabled */
-    p = (UINT8 *)btm_cb.cfg.bd_name;
-    if (p != (UINT8 *)p_name) {
-        BCM_STRNCPY_S(btm_cb.cfg.bd_name, p_name, BTM_MAX_LOC_BD_NAME_LEN);
-        btm_cb.cfg.bd_name[BTM_MAX_LOC_BD_NAME_LEN] = '\0';
+    if (name_type & BT_DEVICE_TYPE_BLE) {
+        p = (UINT8 *)btm_cb.cfg.ble_bd_name;
+        if (p != (UINT8 *)p_name) {
+            BCM_STRNCPY_S(btm_cb.cfg.ble_bd_name, p_name, BTM_MAX_LOC_BD_NAME_LEN);
+            btm_cb.cfg.ble_bd_name[BTM_MAX_LOC_BD_NAME_LEN] = '\0';
+        }
     }
+#if (CLASSIC_BT_INCLUDED == TRUE)
+    if (name_type & BT_DEVICE_TYPE_BREDR) {
+        p = (UINT8 *)btm_cb.cfg.bredr_bd_name;
+        if (p != (UINT8 *)p_name) {
+            BCM_STRNCPY_S(btm_cb.cfg.bredr_bd_name, p_name, BTM_MAX_LOC_BD_NAME_LEN);
+            btm_cb.cfg.bredr_bd_name[BTM_MAX_LOC_BD_NAME_LEN] = '\0';
+        }
+    }
+#endif // #if (CLASSIC_BT_INCLUDED == TRUE)
 #else
     p = (UINT8 *)p_name;
 #endif
 #if CLASSIC_BT_INCLUDED
-    if (btsnd_hcic_change_name(p)) {
+    if ((name_type & BT_DEVICE_TYPE_BREDR) && btsnd_hcic_change_name(p)) {
         return (BTM_CMD_STARTED);
     } else
 #endif
@@ -496,10 +517,34 @@ tBTM_STATUS BTM_SetLocalDeviceName (char *p_name)
 **                              is returned and p_name is set to NULL
 **
 *******************************************************************************/
-tBTM_STATUS BTM_ReadLocalDeviceName (char **p_name)
+tBTM_STATUS BTM_ReadLocalDeviceName (char **p_name, tBT_DEVICE_TYPE name_type)
 {
+    /*
+    // name_type should be BT_DEVICE_TYPE_BLE or BT_DEVICE_TYPE_BREDR
+    if (name_type > BT_DEVICE_TYPE_BREDR) {
+        *p_name = NULL;
+        BTM_TRACE_ERROR("name_type unknown %d", name_type);
+        return (BTM_NO_RESOURCES);
+    }
+    */
+
 #if BTM_MAX_LOC_BD_NAME_LEN > 0
-    *p_name = btm_cb.cfg.bd_name;
+#if (CLASSIC_BT_INCLUDED == TRUE)
+    if ((name_type == BT_DEVICE_TYPE_DUMO) &&
+        (BCM_STRNCMP_S(btm_cb.cfg.bredr_bd_name, btm_cb.cfg.ble_bd_name, BTM_MAX_LOC_BD_NAME_LEN) != 0)) {
+        *p_name = NULL;
+        BTM_TRACE_ERROR("Error, BLE and BREDR have different names, return NULL\n");
+        return (BTM_NO_RESOURCES);
+    }
+#endif // #if (CLASSIC_BT_INCLUDED == TRUE)
+    if (name_type & BT_DEVICE_TYPE_BLE) {
+        *p_name = btm_cb.cfg.ble_bd_name;
+    }
+#if (CLASSIC_BT_INCLUDED == TRUE)
+    if (name_type & BT_DEVICE_TYPE_BREDR) {
+        *p_name = btm_cb.cfg.bredr_bd_name;
+    }
+#endif // #if (CLASSIC_BT_INCLUDED == TRUE)
     return (BTM_SUCCESS);
 #else
     *p_name = NULL;
@@ -718,9 +763,6 @@ void btm_vsc_complete (UINT8 *p, UINT16 opcode, UINT16 evt_len,
 #if (BLE_INCLUDED == TRUE)
     tBTM_BLE_CB *ble_cb = &btm_cb.ble_ctr_cb;
     switch(opcode) {
-        case HCI_VENDOR_BLE_LONG_ADV_DATA:
-            BTM_TRACE_EVENT("Set long adv data complete\n");
-            break;
         case HCI_VENDOR_BLE_UPDATE_DUPLICATE_EXCEPTIONAL_LIST: {
             uint8_t subcode, status; uint32_t length;
             STREAM_TO_UINT8(status, p);
@@ -739,20 +781,37 @@ void btm_vsc_complete (UINT8 *p, UINT16 opcode, UINT16 evt_len,
             }
             break;
         }
+        case HCI_VENDOR_BLE_SET_CSA_SUPPORT: {
+            uint8_t status;
+            STREAM_TO_UINT8(status, p);
+            if (ble_cb && ble_cb->set_csa_support_cmpl_cb) {
+                ble_cb->set_csa_support_cmpl_cb(status);
+            }
+            break;
+        }
+        case HCI_VENDOR_BLE_SET_EVT_MASK: {
+            uint8_t status;
+            STREAM_TO_UINT8(status, p);
+            if (ble_cb && ble_cb->set_vendor_evt_mask_cmpl_cb) {
+                ble_cb->set_vendor_evt_mask_cmpl_cb(status);
+            }
+            break;
+        }
         default:
-        break;
+            break;
     }
+#endif // (BLE_INCLUDED == TRUE)
     tBTM_VSC_CMPL   vcs_cplt_params;
 
     /* If there was a callback address for vcs complete, call it */
     if (p_vsc_cplt_cback) {
-        /* Pass paramters to the callback function */
+        /* Pass parameters to the callback function */
         vcs_cplt_params.opcode = opcode;        /* Number of bytes in return info */
         vcs_cplt_params.param_len = evt_len;    /* Number of bytes in return info */
         vcs_cplt_params.p_param_buf = p;
         (*p_vsc_cplt_cback)(&vcs_cplt_params);  /* Call the VSC complete callback function */
     }
-#endif
+
 }
 
 /*******************************************************************************
@@ -828,7 +887,7 @@ void btm_vendor_specific_evt (UINT8 *p, UINT8 evt_len)
 
     STREAM_TO_UINT8(sub_event, p_evt);
     /* Check in subevent if authentication is through Legacy Authentication. */
-    if (sub_event == ESP_VS_REM_LEGACY_AUTH_CMP) {
+    if (sub_event == HCI_VENDOR_LEGACY_REM_AUTH_EVT_SUBCODE) {
         UINT16 hci_handle;
         STREAM_TO_UINT16(hci_handle, p_evt);
         btm_sec_handle_remote_legacy_auth_cmp(hci_handle);
@@ -875,6 +934,42 @@ tBTM_STATUS BTM_WritePageTimeout(UINT16 timeout, tBTM_CMPL_CB *p_cb)
 
     return (BTM_CMD_STARTED);
 }
+
+#if (ENC_KEY_SIZE_CTRL_MODE != ENC_KEY_SIZE_CTRL_MODE_NONE)
+void btm_set_min_enc_key_size_complete(const UINT8 *p)
+{
+    tBTM_SET_MIN_ENC_KEY_SIZE_RESULTS results;
+    tBTM_CMPL_CB *p_cb = btm_cb.devcb.p_set_min_enc_key_size_cmpl_cb;
+
+    STREAM_TO_UINT8(results.hci_status, p);
+
+    if (p_cb) {
+        btm_cb.devcb.p_set_min_enc_key_size_cmpl_cb = NULL;
+        (*p_cb)(&results);
+    }
+}
+
+tBTM_STATUS BTM_SetMinEncKeySize(UINT8 key_size, tBTM_CMPL_CB *p_cb)
+{
+    BTM_TRACE_EVENT ("BTM: BTM_SetMinEncKeySize: key_size: %d.", key_size);
+
+    btm_cb.devcb.p_set_min_enc_key_size_cmpl_cb = p_cb;
+    tBTM_STATUS status = BTM_NO_RESOURCES;
+
+#if (ENC_KEY_SIZE_CTRL_MODE == ENC_KEY_SIZE_CTRL_MODE_VSC)
+    /* Send the HCI command */
+    UINT8 param[1];
+    UINT8 *p = (UINT8 *)param;
+    UINT8_TO_STREAM(p, key_size);
+    status = BTM_VendorSpecificCommand(HCI_VENDOR_BT_SET_MIN_ENC_KEY_SIZE, 1, param, NULL);
+#else
+    if (btsnd_hcic_set_min_enc_key_size(key_size)) {
+        status = BTM_SUCCESS;
+    }
+#endif
+    return status;
+}
+#endif
 
 /*******************************************************************************
 **
@@ -995,6 +1090,7 @@ tBTM_STATUS BTM_WriteVoiceSettings(UINT16 settings)
     return (BTM_NO_RESOURCES);
 }
 
+#if (BLE_HOST_ENABLE_TEST_MODE_EN == TRUE)
 /*******************************************************************************
 **
 ** Function         BTM_EnableTestMode
@@ -1051,6 +1147,7 @@ tBTM_STATUS BTM_EnableTestMode(void)
         return (BTM_NO_RESOURCES);
     }
 }
+#endif // #if (BLE_HOST_ENABLE_TEST_MODE_EN == TRUE)
 
 /*******************************************************************************
 **

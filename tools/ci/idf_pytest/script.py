@@ -25,6 +25,7 @@ from idf_py_actions.constants import SUPPORTED_TARGETS as TOOLS_SUPPORTED_TARGET
 from .constants import CollectMode
 from .constants import DEFAULT_BUILD_LOG_FILENAME
 from .constants import DEFAULT_CONFIG_RULES_STR
+from .constants import DEFAULT_SIZE_JSON_FILENAME
 from .constants import PytestCase
 from .plugin import IdfPytestEmbedded
 
@@ -50,6 +51,7 @@ def get_pytest_cases(
     paths: t.Union[str, t.List[str]],
     target: str = CollectMode.ALL,
     *,
+    config_name: t.Optional[str] = None,
     marker_expr: t.Optional[str] = None,
     filter_expr: t.Optional[str] = None,
     apps: t.Optional[t.List[App]] = None,
@@ -67,6 +69,7 @@ def get_pytest_cases(
 
     :param paths: paths to search for pytest scripts
     :param target: target or keywords to get test cases for, detailed above
+    :param config_name: sdkconfig name
     :param marker_expr: pytest marker expression, `-m`
     :param filter_expr: pytest filter expression, `-k`
     :param apps: built app list, skip the tests required by apps not in the list
@@ -81,7 +84,7 @@ def get_pytest_cases(
         return cases
 
     def _get_pytest_cases(_target: str, _single_target_duplicate_mode: bool = False) -> t.List[PytestCase]:
-        collector = IdfPytestEmbedded(_target, single_target_duplicate_mode=_single_target_duplicate_mode, apps=apps)
+        collector = IdfPytestEmbedded(_target, config_name=config_name, single_target_duplicate_mode=_single_target_duplicate_mode, apps=apps)
 
         with io.StringIO() as buf:
             with redirect_stdout(buf):
@@ -126,8 +129,10 @@ def get_all_apps(
     config_rules_str: t.Optional[t.List[str]] = None,
     preserve_all: bool = False,
     extra_default_build_targets: t.Optional[t.List[str]] = None,
+    compare_manifest_sha_filepath: t.Optional[str] = None,
     modified_components: t.Optional[t.List[str]] = None,
     modified_files: t.Optional[t.List[str]] = None,
+    ignore_app_dependencies_components: t.Optional[t.List[str]] = None,
     ignore_app_dependencies_filepatterns: t.Optional[t.List[str]] = None,
 ) -> t.Tuple[t.Set[App], t.Set[App]]:
     """
@@ -140,8 +145,10 @@ def get_all_apps(
     :param config_rules_str: config rules string
     :param preserve_all: preserve all apps
     :param extra_default_build_targets: extra default build targets
+    :param compare_manifest_sha_filepath: check manifest sha filepath
     :param modified_components: modified components
     :param modified_files: modified files
+    :param ignore_app_dependencies_components: ignore app dependencies components
     :param ignore_app_dependencies_filepatterns: ignore app dependencies filepatterns
     :return: tuple of test-required apps and non-test-related apps
     """
@@ -156,13 +163,15 @@ def get_all_apps(
             build_dir='build_@t_@w',
             config_rules_str=config_rules_str or DEFAULT_CONFIG_RULES_STR,
             build_log_filename=DEFAULT_BUILD_LOG_FILENAME,
-            size_json_filename='size.json',
+            size_json_filename=DEFAULT_SIZE_JSON_FILENAME,
             check_warnings=True,
             manifest_rootpath=IDF_PATH,
+            compare_manifest_sha_filepath=compare_manifest_sha_filepath,
             manifest_files=get_all_manifest_files(),
             default_build_targets=SUPPORTED_TARGETS + (extra_default_build_targets or []),
             modified_components=modified_components,
             modified_files=modified_files,
+            ignore_app_dependencies_components=ignore_app_dependencies_components,
             ignore_app_dependencies_filepatterns=ignore_app_dependencies_filepatterns,
             include_skipped_apps=True,
         ))
@@ -213,8 +222,7 @@ def get_all_apps(
         elif app.build_status != BuildStatus.SKIPPED:
             if case := pytest_app_path_tuple_dict.get((app_path, app.target, app.config_name)):
                 test_related_apps.add(app)
-                # should be built if
-                app.build_status = BuildStatus.SHOULD_BE_BUILT
+                # build or not should be decided by the build stage
                 app.preserve = True
                 logging.debug('Found test-related app: %s - required by %s', app, case.path)
             else:

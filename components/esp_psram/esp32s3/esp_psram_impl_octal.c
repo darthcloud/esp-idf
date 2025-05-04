@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -11,7 +11,7 @@
 #include "esp_types.h"
 #include "esp_bit_defs.h"
 #include "esp_log.h"
-#include "../esp_psram_impl.h"
+#include "esp_private/esp_psram_impl.h"
 #include "esp32s3/rom/ets_sys.h"
 #include "esp32s3/rom/spi_flash.h"
 #include "esp32s3/rom/opi_flash.h"
@@ -31,9 +31,11 @@
 #define OCT_PSRAM_WR_CMD_BITLEN         16
 #define OCT_PSRAM_ADDR_BITLEN           32
 #define OCT_PSRAM_RD_DUMMY_BITLEN       (2*(10-1))
+#define OCT_PSRAM_RD_REG_DUMMY_BITLEN   (2*(5-1))
 #define OCT_PSRAM_WR_DUMMY_BITLEN       (2*(5-1))
-#define OCT_PSRAM_CS1_IO                SPI_CS1_GPIO_NUM
-#define OCT_PSRAM_VENDOR_ID             0xD
+#define OCT_PSRAM_CS1_IO                MSPI_IOMUX_PIN_NUM_CS1
+#define OCT_PSRAM_VENDOR_ID_AP          0xD
+#define OCT_PSRAM_VENDOR_ID_UNILC       0x1A
 
 #define OCT_PSRAM_CS_SETUP_TIME         3
 #define OCT_PSRAM_CS_HOLD_TIME          3
@@ -115,7 +117,7 @@ static void s_init_psram_mode_reg(int spi_num, opi_psram_mode_reg_t *mode_reg_co
     int cmd_len = 16;
     uint32_t addr = 0x0;    //0x0 is the MR0 register
     int addr_bit_len = 32;
-    int dummy = OCT_PSRAM_RD_DUMMY_BITLEN;
+    int dummy = OCT_PSRAM_RD_REG_DUMMY_BITLEN;
     opi_psram_mode_reg_t mode_reg = {0};
     int data_bit_len = 16;
 
@@ -178,7 +180,7 @@ static void s_get_psram_mode_reg(int spi_num, opi_psram_mode_reg_t *out_reg)
     esp_rom_spiflash_read_mode_t mode = ESP_ROM_SPIFLASH_OPI_DTR_MODE;
     int cmd_len = 16;
     int addr_bit_len = 32;
-    int dummy = OCT_PSRAM_RD_DUMMY_BITLEN;
+    int dummy = OCT_PSRAM_RD_REG_DUMMY_BITLEN;
     int data_bit_len = 16;
 
     //Read MR0~1 register
@@ -222,7 +224,7 @@ static void s_get_psram_mode_reg(int spi_num, opi_psram_mode_reg_t *out_reg)
 
 static void s_print_psram_info(opi_psram_mode_reg_t *reg_val)
 {
-    ESP_EARLY_LOGI(TAG, "vendor id    : 0x%02x (%s)", reg_val->mr1.vendor_id, reg_val->mr1.vendor_id == 0x0d ? "AP" : "UNKNOWN");
+    ESP_EARLY_LOGI(TAG, "vendor id    : 0x%02x (%s)", reg_val->mr1.vendor_id, reg_val->mr1.vendor_id == 0x0d ? "AP" : (reg_val->mr1.vendor_id == 0x1a ? "UnilC" : "UNKNOWN"));
     ESP_EARLY_LOGI(TAG, "dev id       : 0x%02x (generation %d)", reg_val->mr2.dev_id, reg_val->mr2.dev_id + 1);
     ESP_EARLY_LOGI(TAG, "density      : 0x%02x (%d Mbit)", reg_val->mr2.density, reg_val->mr2.density == 0x1 ? 32 :
                    reg_val->mr2.density == 0X3 ? 64 :
@@ -266,7 +268,7 @@ static void s_init_psram_pins(void)
     REG_SET_FIELD(SPI_MEM_DATE_REG(0), SPI_MEM_SPI_SMEM_SPICLK_FUN_DRV, 3);
 
     // Preserve psram pins
-    esp_gpio_reserve_pins(BIT64(OCT_PSRAM_CS1_IO));
+    esp_gpio_reserve(BIT64(OCT_PSRAM_CS1_IO));
 }
 
 /**
@@ -316,7 +318,7 @@ esp_err_t esp_psram_impl_enable(void)
     s_init_psram_mode_reg(1, &mode_reg);
     //Print PSRAM info
     s_get_psram_mode_reg(1, &mode_reg);
-    if (mode_reg.mr1.vendor_id != OCT_PSRAM_VENDOR_ID) {
+    if (mode_reg.mr1.vendor_id != OCT_PSRAM_VENDOR_ID_AP && mode_reg.mr1.vendor_id != OCT_PSRAM_VENDOR_ID_UNILC) {
         ESP_EARLY_LOGE(TAG, "PSRAM ID read error: 0x%08x, PSRAM chip not found or not supported, or wrong PSRAM line mode", mode_reg.mr1.vendor_id);
         return ESP_ERR_NOT_SUPPORTED;
     }

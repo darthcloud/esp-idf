@@ -75,6 +75,7 @@ enum {
     BTM_SET_STATIC_RAND_ADDR_FAIL,      /* 25 Command failed */
     BTM_INVALID_STATIC_RAND_ADDR,       /* 26 invalid static rand addr */
     BTM_SEC_DEV_REC_REMOVED,            /* 27 Device record relate to the bd_addr is removed */
+    BTM_HCI_ERROR = 128,                /* 128 HCI error code from controller (0x80) */
 };
 
 typedef uint8_t tBTM_STATUS;
@@ -197,6 +198,11 @@ typedef void (tBTM_UPDATE_WHITELIST_CBACK) (UINT8 status, tBTM_WL_OPERATION wl_o
 
 typedef void (tBTM_SET_LOCAL_PRIVACY_CBACK) (UINT8 status);
 
+typedef void (tBTM_SET_RPA_TIMEOUT_CMPL_CBACK) (UINT8 status);
+
+typedef void (tBTM_ADD_DEV_TO_RESOLVING_LIST_CMPL_CBACK) (UINT8 status);
+
+typedef void (tBTM_BLE_VENDOR_HCI_EVT_CBACK) (UINT8 subevt_code, UINT8 param_len, UINT8 *params);
 /*******************************
 **  Device Coexist status
 ********************************/
@@ -330,7 +336,7 @@ typedef enum {
 #define BTM_COD_MINOR_CELLULAR              0x04
 #define BTM_COD_MINOR_CORDLESS              0x08
 #define BTM_COD_MINOR_SMART_PHONE           0x0C
-#define BTM_COD_MINOR_WIRED_MDM_V_GTWY      0x10 /* wired modem or voice gatway */
+#define BTM_COD_MINOR_WIRED_MDM_V_GTWY      0x10 /* wired modem or voice gateway */
 #define BTM_COD_MINOR_ISDN_ACCESS           0x14
 
 /* minor device class field for LAN Access Point Major Class */
@@ -453,23 +459,22 @@ typedef enum {
 #define BTM_COD_SERVICE_INFORMATION         0x8000
 
 /* class of device field macros */
-#define BTM_COD_FORMAT_TYPE(u8, pd)         {u8  = pd[2]&0x03;}
+#define BTM_COD_RESERVED_2(u8, pd)          {u8  = pd[2]&0x03;}
 #define BTM_COD_MINOR_CLASS(u8, pd)         {u8  = pd[2]&0xFC;}
 #define BTM_COD_MAJOR_CLASS(u8, pd)         {u8  = pd[1]&0x1F;}
 #define BTM_COD_SERVICE_CLASS(u16, pd)      {u16 = pd[0]; u16<<=8; u16 += pd[1]&0xE0;}
 
 /* to set the fields (assumes that format type is always 0) */
-#define FIELDS_TO_COD(pd, mn, mj, sv) {pd[2] = mn; pd[1] =              \
-                                       mj+ ((sv)&BTM_COD_SERVICE_CLASS_LO_B); \
-                                       pd[0] = (sv) >> 8;}
+#define FIELDS_TO_COD(pd, rs, mn, mj, sv) {pd[2] = (mn & BTM_COD_MINOR_CLASS_MASK) + (rs & BTM_COD_RESERVED_2_MASK);   \
+                                           pd[1] = mj+ ((sv)&BTM_COD_SERVICE_CLASS_LO_B); \
+                                           pd[0] = (sv) >> 8;}
 
 /* the COD masks */
-#define BTM_COD_FORMAT_TYPE_MASK      0x03
 #define BTM_COD_MINOR_CLASS_MASK      0xFC
 #define BTM_COD_MAJOR_CLASS_MASK      0x1F
 #define BTM_COD_SERVICE_CLASS_LO_B    0x00E0
 #define BTM_COD_SERVICE_CLASS_MASK    0xFFE0
-
+#define BTM_COD_RESERVED_2_MASK       0x03
 
 /* BTM service definitions
 ** Used for storing EIR data to bit mask
@@ -806,6 +811,16 @@ typedef struct {
     BD_ADDR     rem_bda;
 } tBTM_RSSI_RESULTS;
 
+/* Structure returned with read channel map event (in tBTM_CMPL_CB callback function)
+** in response to BTM_ReadChannelMap call.
+*/
+typedef struct {
+    tBTM_STATUS status;                 /* BTM operation status */
+    UINT8       hci_status;              /* HCI command complete status */
+    UINT8       channel_map[5]; /* Channel map (5 bytes) */
+    BD_ADDR     rem_bda;                 /* Remote device Bluetooth address */
+} tBTM_BLE_CH_MAP_RESULTS;
+
 /* Structure returned with read current TX power event (in tBTM_CMPL_CB callback function)
 ** in response to BTM_ReadTxPower call.
 */
@@ -859,6 +874,15 @@ typedef struct {
     BD_ADDR     rem_bda;
     UINT16      pkt_types;
 } tBTM_SET_ACL_PKT_TYPES_RESULTS;
+
+#if (ENC_KEY_SIZE_CTRL_MODE != ENC_KEY_SIZE_CTRL_MODE_NONE)
+/* Structure returned with set minimal encryption key size event (in tBTM_CMPL_CB callback function)
+** in response to BTM_SetMinEncKeySize call.
+*/
+typedef struct {
+    UINT8 hci_status;
+} tBTM_SET_MIN_ENC_KEY_SIZE_RESULTS;
+#endif
 
 /* Structure returned with set BLE channels event (in tBTM_CMPL_CB callback function)
 ** in response to BTM_BleSetChannels call.
@@ -1015,9 +1039,6 @@ typedef void (tBTM_ACL_DB_CHANGE_CB) (BD_ADDR p_bda, DEV_CLASS p_dc,
 /* Define an invalid SCO index and an invalid HCI handle */
 #define BTM_INVALID_SCO_INDEX       0xFFFF
 #define BTM_INVALID_HCI_HANDLE      0xFFFF
-
-/* Define an invalid SCO disconnect reason */
-#define BTM_INVALID_SCO_DISC_REASON 0xFFFF
 
 /* Define first active SCO index */
 #define BTM_FIRST_ACTIVE_SCO_INDEX  BTM_MAX_SCO_LINKS
@@ -1594,7 +1615,7 @@ typedef struct {
     tBTM_AUTH_REQ   loc_auth_req;   /* Authentication required for local device */
     tBTM_AUTH_REQ   rmt_auth_req;   /* Authentication required for peer device */
     tBTM_IO_CAP     loc_io_caps;    /* IO Capabilities of the local device */
-    tBTM_IO_CAP     rmt_io_caps;    /* IO Capabilities of the remot device */
+    tBTM_IO_CAP     rmt_io_caps;    /* IO Capabilities of the remote device */
 } tBTM_SP_CFM_REQ;
 
 /* data type for BTM_SP_KEY_REQ_EVT */
@@ -2067,7 +2088,7 @@ BOOLEAN BTM_IsDeviceUp (void);
 **
 *******************************************************************************/
 //extern
-tBTM_STATUS BTM_SetLocalDeviceName (char *p_name);
+tBTM_STATUS BTM_SetLocalDeviceName (char *p_name, tBT_DEVICE_TYPE name_type);
 
 /*******************************************************************************
 **
@@ -2096,7 +2117,7 @@ tBTM_STATUS  BTM_SetDeviceClass (DEV_CLASS dev_class);
 **
 *******************************************************************************/
 //extern
-tBTM_STATUS BTM_ReadLocalDeviceName (char **p_name);
+tBTM_STATUS BTM_ReadLocalDeviceName (char **p_name, tBT_DEVICE_TYPE name_type);
 
 /*******************************************************************************
 **
@@ -2267,7 +2288,7 @@ UINT8 BTM_SetTraceLevel (UINT8 new_level);
 **
 ** Function         BTM_WritePageTimeout
 **
-** Description      Send HCI Wite Page Timeout.
+** Description      Send HCI Write Page Timeout.
 **
 ** Returns
 **      BTM_SUCCESS         Command sent.
@@ -2304,6 +2325,22 @@ tBTM_STATUS BTM_ReadPageTimeout(tBTM_CMPL_CB *p_cb);
 *******************************************************************************/
 //extern
 tBTM_STATUS BTM_SetAclPktTypes(BD_ADDR remote_bda, UINT16 pkt_types, tBTM_CMPL_CB *p_cb);
+
+/*******************************************************************************
+**
+** Function         BTM_SetMinEncKeySize
+**
+** Description      Send HCI Set Minimum Encryption Key Size
+**
+** Returns
+**      BTM_SUCCESS         Command sent.
+**      BTM_NO_RESOURCES    If out of resources to send the command.
+**
+*******************************************************************************/
+//extern
+#if (ENC_KEY_SIZE_CTRL_MODE != ENC_KEY_SIZE_CTRL_MODE_NONE)
+tBTM_STATUS BTM_SetMinEncKeySize(UINT8 key_size, tBTM_CMPL_CB *p_cb);
+#endif
 
 /*******************************************************************************
 **
@@ -2459,7 +2496,7 @@ tBTM_STATUS  BTM_StartInquiry (tBTM_INQ_PARMS *p_inqparms,
 ** Description      This function returns a bit mask of the current inquiry state
 **
 ** Returns          BTM_INQUIRY_INACTIVE if inactive (0)
-**                  BTM_LIMITED_INQUIRY_ACTIVE if a limted inquiry is active
+**                  BTM_LIMITED_INQUIRY_ACTIVE if a limited inquiry is active
 **                  BTM_GENERAL_INQUIRY_ACTIVE if a general inquiry is active
 **                  BTM_PERIODIC_INQUIRY_ACTIVE if a periodic inquiry is active
 **
@@ -2997,7 +3034,19 @@ tBTM_STATUS BTM_SwitchRole (BD_ADDR remote_bd_addr,
 //extern
 tBTM_STATUS BTM_ReadRSSI (BD_ADDR remote_bda, tBT_TRANSPORT transport, tBTM_CMPL_CB *p_cb);
 
-
+/*******************************************************************************
+**
+** Function         BTM_ReadChannelMap
+**
+** Description      This function is called to read the current channel map
+**                  for the given connection. The results are returned via
+**                  the callback (tBTM_BLE_CH_MAP_RESULTS).
+**
+** Returns          BTM_CMD_STARTED if successfully initiated or error code
+**
+*******************************************************************************/
+tBTM_STATUS BTM_ReadChannelMap(BD_ADDR remote_bda, tBTM_CMPL_CB *p_cb);
+#if (BLE_HOST_READ_TX_POWER_EN == TRUE)
 /*******************************************************************************
 **
 ** Function         BTM_ReadTxPower
@@ -3018,10 +3067,13 @@ tBTM_STATUS BTM_ReadTxPower (BD_ADDR remote_bda,
                              tBT_TRANSPORT transport, tBTM_CMPL_CB *p_cb);
 
 tBTM_STATUS BTM_BleReadAdvTxPower(tBTM_CMPL_CB *p_cb);
+#endif // #if (BLE_HOST_READ_TX_POWER_EN == TRUE)
 
 void BTM_BleGetWhiteListSize(uint16_t *length);
 
-
+#if (BLE_50_EXTEND_SYNC_EN == TRUE)
+void BTM_BleGetPeriodicAdvListSize(uint8_t *size);
+#endif //#if (BLE_50_EXTEND_SYNC_EN == TRUE)
 /*******************************************************************************
 **
 ** Function         BTM_ReadLinkQuality
@@ -3231,21 +3283,6 @@ UINT16 BTM_ReadScoHandle (UINT16 sco_inx);
 *******************************************************************************/
 //extern
 UINT8 *BTM_ReadScoBdAddr (UINT16 sco_inx);
-
-
-/*******************************************************************************
-**
-** Function         BTM_ReadScoDiscReason
-**
-** Description      This function is returns the reason why an (e)SCO connection
-**                  has been removed. It contains the value until read, or until
-**                  another (e)SCO connection has disconnected.
-**
-** Returns          HCI reason or BTM_INVALID_SCO_DISC_REASON if not set.
-**
-*******************************************************************************/
-//extern
-UINT16 BTM_ReadScoDiscReason (void);
 
 
 /*******************************************************************************
@@ -3599,7 +3636,7 @@ BOOLEAN BTM_SecAddDevice (BD_ADDR bd_addr, DEV_CLASS dev_class,
 **
 ** Description      Free resources associated with the device.
 **
-** Returns          TRUE if rmoved OK, FALSE if not found
+** Returns          TRUE if removed OK, FALSE if not found
 **
 *******************************************************************************/
 //extern
@@ -4245,7 +4282,7 @@ UINT8 BTM_GetEirUuidList( UINT8 *p_eir, UINT8 uuid_size, UINT8 *p_num_uuid,
 **                               pointer is used, PCM parameter maintained in
 **                               the control block will be used; otherwise update
 **                               control block value.
-**                  err_data_rpt: Lisbon feature to enable the erronous data report
+**                  err_data_rpt: Lisbon feature to enable the erroneous data report
 **                                or not.
 **
 ** Returns          BTM_SUCCESS if the successful.

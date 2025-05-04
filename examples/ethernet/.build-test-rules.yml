@@ -3,19 +3,14 @@
 examples/ethernet/basic:
   enable:
     - if: INCLUDE_DEFAULT == 1
-  depends_components:
-    - esp_eth
-    - esp_netif
-    - lwip
-    - esp_event
-    - esp_driver_gpio
-    - esp_driver_spi
-
-examples/ethernet/enc28j60:
   disable:
-    - if: IDF_TARGET == "esp32p4"
+    - if: IDF_TARGET in ["esp32h21", "esp32h4"]
       temporary: true
-      reason: target esp32p4 is not supported yet # TODO: IDF-8073
+      reason: not supported yet # TODO: [ESP32H21] IDF-11581 [ESP32H4] IDF-12360
+  disable_test:
+    - if: IDF_TARGET not in ["esp32"]
+      temporary: true
+      reason: lack of runners
   depends_components:
     - esp_eth
     - esp_netif
@@ -25,8 +20,12 @@ examples/ethernet/enc28j60:
     - esp_driver_spi
 
 examples/ethernet/iperf:
+  disable:
+    - if: IDF_TARGET in ["esp32h21", "esp32h4"]
+      temporary: true
+      reason: not supported yet # TODO: [ESP32H21] IDF-11581 [ESP32H4] IDF-12360
   disable_test:
-    - if: IDF_TARGET not in ["esp32"]
+    - if: IDF_TARGET not in ["esp32", "esp32p4"]
       temporary: true
       reason: lack of runners
   depends_components:
@@ -37,8 +36,13 @@ examples/ethernet/iperf:
     - console
     - esp_driver_gpio
     - esp_driver_spi
-  depends_filepatterns:
-    - examples/common_components/iperf/**/*
-    - examples/common_components/protocol_examples_common/**/*
-    - examples/system/console/advanced/components/cmd_system/**/*
-    - examples/ethernet/basic/components/ethernet_init/**/*
+    - cmd_system
+    - ethernet_init
+    - protocol_examples_common
+
+examples/ethernet/ptp:
+  enable:
+    - if: SOC_EMAC_IEEE1588V2_SUPPORTED == 1
+  depends_components:
+    - esp_eth
+    - esp_netif

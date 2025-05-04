@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2017-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2017-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -111,7 +111,7 @@ extern "C" {
 #define ESP_ERR_MESH_DISCARD_DUPLICATE    (ESP_ERR_MESH_BASE + 20)   /**< discard the packet due to the duplicate sequence number */
 #define ESP_ERR_MESH_DISCARD              (ESP_ERR_MESH_BASE + 21)   /**< discard the packet */
 #define ESP_ERR_MESH_VOTING               (ESP_ERR_MESH_BASE + 22)   /**< vote in progress */
-#define ESP_ERR_MESH_XMIT                 (ESP_ERR_MESH_BASE + 23)   /**< XMIT */
+#define ESP_ERR_MESH_XMIT                 (ESP_ERR_MESH_BASE + 23)   /**< TX fail, the tx state is a value other than timeout and disconnect */
 #define ESP_ERR_MESH_QUEUE_READ           (ESP_ERR_MESH_BASE + 24)   /**< error in reading queue */
 #define ESP_ERR_MESH_PS                   (ESP_ERR_MESH_BASE + 25)   /**< mesh PS is not specified as enable or disable */
 #define ESP_ERR_MESH_RECV_RELEASE         (ESP_ERR_MESH_BASE + 26)   /**< release esp_mesh_recv_toDS */
@@ -141,9 +141,8 @@ extern "C" {
 #define MESH_ASSOC_FLAG_STA_VOTED           (0x04)     /**< station vote done, set when connect to router */
 #define MESH_ASSOC_FLAG_NETWORK_FREE        (0x08)     /**< no root in current network */
 #define MESH_ASSOC_FLAG_STA_VOTE_EXPIRE     (0x10)     /**< the voted address is expired, means the voted device lose the chance to be root */
-#define MESH_ASSOC_FLAG_ROOTS_FOUND         (0x20)     /**< roots conflict is found, means that thre are at least two roots in the mesh network */
+#define MESH_ASSOC_FLAG_ROOTS_FOUND         (0x20)     /**< roots conflict is found, means that there are at least two roots in the mesh network */
 #define MESH_ASSOC_FLAG_ROOT_FIXED          (0x40)     /**< the root is fixed in the mesh network */
-
 
 /**
  * @brief Mesh PS (Power Save) duty cycle type
@@ -217,7 +216,7 @@ typedef enum {
     MESH_ROOT,    /**< the only sink of the mesh network. Has the ability to access external IP network */
     MESH_NODE,    /**< intermediate device. Has the ability to forward packets over the mesh network */
     MESH_LEAF,    /**< has no forwarding ability */
-    MESH_STA,     /**< connect to router with a standlone Wi-Fi station mode, no network expansion capability */
+    MESH_STA,     /**< connect to router with a standalone Wi-Fi station mode, no network expansion capability */
 } mesh_type_t;
 
 /**
@@ -638,19 +637,22 @@ esp_err_t esp_mesh_stop(void);
  * @param[in]  to  the address of the final destination of the packet
  *             - If the packet is to the root, set this parameter to NULL.
  *             - If the packet is to an external IP network, set this parameter to the IPv4:PORT combination.
- *               This packet will be delivered to the root firstly, then the root will forward this packet to the final IP server address.
+ *               This packet will be delivered to the root firstly, then users need to call esp_mesh_recv_toDS() on the root node to forward this
+ *               packet to the final IP server address.
  * @param[in]  data  pointer to a sending mesh packet
  *             - Field size should not exceed MESH_MPS. Note that the size of one mesh packet should not exceed MESH_MTU.
  *             - Field proto should be set to data protocol in use (default is MESH_PROTO_BIN for binary).
  *             - Field tos should be set to transmission tos (type of service) in use (default is MESH_TOS_P2P for point-to-point reliable).
+ *               - If the packet is to the root, MESH_TOS_P2P must be set to ensure reliable transmission.
+ *               - As long as the MESH_TOS_P2P is set, the API is blocking, even if the flag is set with MESH_DATA_NONBLOCK.
+ *               - As long as the MESH_TOS_DEF is set, the API is non-blocking.
  * @param[in]  flag  bitmap for data sent
+ *             - Flag is at least one of the three MESH_DATA_P2P/MESH_DATA_FROMDS/MESH_DATA_TODS, which represents the direction of packet sending.
  *             -  Speed up the route search
- *               - If the packet is to the root and "to" parameter is NULL, set this parameter to 0.
  *               - If the packet is to an internal device, MESH_DATA_P2P should be set.
  *               - If the packet is to the root ("to" parameter isn't NULL) or to external IP network, MESH_DATA_TODS should be set.
  *               - If the packet is from the root to an internal device, MESH_DATA_FROMDS should be set.
- *             - Specify whether this API is block or non-block, block by default
- *               - If needs non-blocking, MESH_DATA_NONBLOCK should be set. Otherwise, may use esp_mesh_send_block_time() to specify a blocking time.
+ *             - Specify whether this API is blocking or non-blocking, blocking by default.
  *             - In the situation of the root change, MESH_DATA_DROP identifies this packet can be dropped by the new root
  *               for upstream data to external IP network, we try our best to avoid data loss caused by the root change, but
  *               there is a risk that the new root is running out of memory because most of memory is occupied by the pending data which
@@ -680,11 +682,14 @@ esp_err_t esp_mesh_stop(void);
  *    - ESP_ERR_MESH_QUEUE_FULL
  *    - ESP_ERR_MESH_NO_ROUTE_FOUND
  *    - ESP_ERR_MESH_DISCARD
+ *    - ESP_ERR_MESH_NOT_SUPPORT
+ *    - ESP_ERR_MESH_XMIT
  */
 esp_err_t esp_mesh_send(const mesh_addr_t *to, const mesh_data_t *data,
                         int flag, const mesh_opt_t opt[],  int opt_count);
 /**
  * @brief      Set blocking time of esp_mesh_send()
+ *             - Suggest to set the blocking time to at least 5s when the environment is poor. Otherwise, esp_mesh_send() may timeout frequently.
  *
  * @attention  This API shall be called before mesh is started.
  *
@@ -1203,6 +1208,7 @@ int esp_mesh_get_xon_qsize(void);
 
 /**
  * @brief      Set whether allow more than one root existing in one network
+ *             - The default value is true, that is, multiple roots are allowed.
  *
  * @param[in]  allowed  allow or not
  *

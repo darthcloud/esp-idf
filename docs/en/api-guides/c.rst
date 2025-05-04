@@ -3,9 +3,14 @@ C Support
 
 :link_to_translation:`zh_CN:[中文]`
 
-.. highlight:: cpp
+ESP-IDF is primarily written in C and provides C APIs. ESP-IDF can use one of the following C Standard Library implementations:
 
-ESP-IDF is primarily written in C and provides C APIs. `Newlib <https://sourceware.org/newlib/>`_ is used as standard C library (the Newlib version can be found in :component_file:`newlib/sbom.yml`). In general, all C features supported by the compiler, currently GCC, should be available in ESP-IDF, unless specified in :ref:`unsupported_c_features` below.
+- `Newlib <https://sourceware.org/newlib/>`_ (default)
+- `Picolibc <https://keithp.com/picolibc/>`_ (enabled with :ref:`CONFIG_LIBC_PICOLIBC<CONFIG_LIBC_PICOLIBC>` Kconfig option)
+
+The Newlib version is specified in :component_file:`newlib/sbom.yml`.
+
+In general, all C features supported by the compiler (currently GCC) can be used in ESP-IDF, unless otherwise noted in :ref:`unsupported_c_features` below.
 
 .. _c_version:
 
@@ -33,4 +38,4 @@ The following features are not supported in ESP-IDF.
 Nested Function Pointers
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-The **GNU dialect of ISO C17** supports `nested functions <https://gcc.gnu.org/onlinedocs/gcc/Nested-Functions.html>`_. However, they do not work in ESP-IDF when referenced as function pointer because the compiler generates a trampoline on the stack, while the stack is not executable in ESP-IDF. Hence, do not use function pointers to nested functions.
+The **GNU dialect of ISO C17** supports `nested functions <https://gcc.gnu.org/onlinedocs/gcc/Nested-Functions.html>`_. However, ESP-IDF does not support referencing nested functions as pointers. This is due to the fact that the GCC compiler generates a `trampoline <https://gcc.gnu.org/onlinedocs/gccint/Trampolines.html>`_ (i.e., small piece of executable code) on the stack when a pointer to a nested function is referenced. ESP-IDF does not permit executing code from a stack, thus use of pointers to nested functions is not supported.

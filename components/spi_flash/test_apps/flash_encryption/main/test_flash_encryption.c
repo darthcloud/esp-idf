@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -20,6 +20,7 @@
 #include "test_utils.h"
 #include "ccomp_timer.h"
 #include "test_flash_utils.h"
+#include "sdkconfig.h"
 
 /*-------------------- For running this test, some configurations are necessary -------------------*/
 /*     ESP32    |           CONFIG_SECURE_FLASH_ENC_ENABLED         |             SET              */
@@ -272,6 +273,33 @@ TEST_CASE("test read & write encrypted data(32 bytes alianed address)", "[flash_
 
     free(cmp_normal_buf);
     free(cmp_encrypt_buf);
+
+    uint32_t size;
+    esp_flash_get_physical_size(NULL, &size);
+
+    if (size > 0x1000000) {
+        start = 0x1030000;
+        TEST_ESP_OK(esp_flash_erase_region(NULL, start, SPI_FLASH_SEC_SIZE));
+        start = (start + 31) & (~31); // round up to 32 byte boundary
+        printf("Test data partition @ 0x%" PRIx32 "\n", (uint32_t) start);
+        ESP_LOG_BUFFER_HEXDUMP(TAG, plainttext_data, sizeof(plainttext_data), ESP_LOG_INFO);
+        printf("Encrypted writing......\n");
+        TEST_ESP_OK(esp_flash_write_encrypted(NULL, start, plainttext_data, sizeof(plainttext_data)));
+
+        cmp_encrypt_buf = heap_caps_malloc(SPI_FLASH_SEC_SIZE, MALLOC_CAP_32BIT | MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+        printf("Encrypted reading......\n");
+        TEST_ESP_OK(esp_flash_read_encrypted(NULL, start, cmp_encrypt_buf, SPI_FLASH_SEC_SIZE));
+        ESP_LOG_BUFFER_HEXDUMP(TAG, cmp_encrypt_buf, sizeof(plainttext_data), ESP_LOG_INFO);
+        TEST_ASSERT_EQUAL_HEX8_ARRAY(plainttext_data, cmp_encrypt_buf, sizeof(plainttext_data));
+
+        cmp_normal_buf = heap_caps_malloc(SPI_FLASH_SEC_SIZE, MALLOC_CAP_32BIT | MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+        TEST_ESP_OK(esp_flash_read(NULL, cmp_normal_buf, start, SPI_FLASH_SEC_SIZE));
+        printf("Normal read(esp_flash_read)......\n");
+        ESP_LOG_BUFFER_HEXDUMP(TAG, cmp_normal_buf, sizeof(plainttext_data), ESP_LOG_INFO);
+
+        free(cmp_normal_buf);
+        free(cmp_encrypt_buf);
+    }
 }
 
 TEST_CASE("test read & write encrypted data(16 bytes alianed but 32 bytes unaligned)", "[flash_encryption]")
@@ -304,6 +332,38 @@ TEST_CASE("test read & write encrypted data(16 bytes alianed but 32 bytes unalig
 
     free(cmp_normal_buf);
     free(cmp_encrypt_buf);
+
+    uint32_t size;
+    esp_flash_get_physical_size(NULL, &size);
+    if (size > 0x1000000) {
+        start = 0x1030000;
+        TEST_ESP_OK(esp_flash_erase_region(NULL, start, SPI_FLASH_SEC_SIZE));
+        do {
+            start++;
+        } while ((start % 16) != 0);
+
+        if (start % 32 == 0) {
+            start += 16;
+        }
+        printf("Test data partition @ 0x%" PRIx32 "\n", (uint32_t) start);
+        ESP_LOG_BUFFER_HEXDUMP(TAG, plainttext_data, sizeof(plainttext_data), ESP_LOG_INFO);
+        printf("Encrypted writing......\n");
+        TEST_ESP_OK(esp_flash_write_encrypted(NULL, start, plainttext_data, sizeof(plainttext_data)));
+
+        cmp_encrypt_buf = heap_caps_malloc(SPI_FLASH_SEC_SIZE, MALLOC_CAP_32BIT | MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+        printf("Encrypted reading......\n");
+        TEST_ESP_OK(esp_flash_read_encrypted(NULL, start, cmp_encrypt_buf, SPI_FLASH_SEC_SIZE));
+        ESP_LOG_BUFFER_HEXDUMP(TAG, cmp_encrypt_buf, sizeof(plainttext_data), ESP_LOG_INFO);
+        TEST_ASSERT_EQUAL_HEX8_ARRAY(plainttext_data, cmp_encrypt_buf, sizeof(plainttext_data));
+
+        cmp_normal_buf = heap_caps_malloc(SPI_FLASH_SEC_SIZE, MALLOC_CAP_32BIT | MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+        TEST_ESP_OK(esp_flash_read(NULL, cmp_normal_buf, start, SPI_FLASH_SEC_SIZE));
+        printf("Normal read(esp_flash_read)......\n");
+        ESP_LOG_BUFFER_HEXDUMP(TAG, cmp_normal_buf, sizeof(plainttext_data), ESP_LOG_INFO);
+
+        free(cmp_normal_buf);
+        free(cmp_encrypt_buf);
+    }
 }
 
 static const uint8_t large_const_buffer[16432] = {
@@ -337,6 +397,27 @@ TEST_CASE("test read & write encrypted data with large buffer(n*64+32+16)", "[fl
     TEST_ESP_OK(esp_flash_read_encrypted(NULL, start, buf, sizeof(large_const_buffer)));
     TEST_ASSERT_EQUAL_HEX8_ARRAY(buf, large_const_buffer, sizeof(large_const_buffer));
     free(buf);
+
+    uint32_t size;
+    esp_flash_get_physical_size(NULL, &size);
+
+    if (size > 0x1000000) {
+        start = 0x1030000;
+        printf("Test data partition @ 0x%" PRIx32 "\n", (uint32_t) start);
+        TEST_ESP_OK(esp_flash_erase_region(NULL, start, 5 * 4096));
+        printf("Encrypted writing......\n");
+
+        TEST_ESP_OK(ccomp_timer_start());
+        TEST_ESP_OK(esp_flash_write_encrypted(NULL, start, large_const_buffer, sizeof(large_const_buffer)));
+        write_time = ccomp_timer_stop();
+        IDF_LOG_PERFORMANCE(TAG, "Writing speed: %.2f us/KB", (double)(write_time/sizeof(large_const_buffer))*1024);
+
+        buf = (uint8_t*)heap_caps_malloc(sizeof(large_const_buffer), MALLOC_CAP_8BIT);
+
+        TEST_ESP_OK(esp_flash_read_encrypted(NULL, start, buf, sizeof(large_const_buffer)));
+        TEST_ASSERT_EQUAL_HEX8_ARRAY(buf, large_const_buffer, sizeof(large_const_buffer));
+        free(buf);
+    }
 }
 
 static DRAM_ATTR const uint8_t large_const_buffer_dram[16432] = {
@@ -371,4 +452,14 @@ TEST_CASE("test read & write encrypted data with large buffer in ram", "[flash_e
     free(buf);
 }
 
+TEST_CASE("test encrypted writes to dangerous regions like bootloader", "[flash_encryption]")
+{
+    TEST_ASSERT_EQUAL_HEX(ESP_ERR_INVALID_ARG, esp_flash_erase_region(NULL, CONFIG_BOOTLOADER_OFFSET_IN_FLASH, 4*4096));
+    TEST_ASSERT_EQUAL_HEX(ESP_ERR_INVALID_ARG, esp_flash_erase_region(NULL, CONFIG_PARTITION_TABLE_OFFSET, 4096));
+    char buffer[32] = {0xa5};
+    // Encrypted writes to bootloader region not allowed
+    TEST_ASSERT_EQUAL_HEX(ESP_ERR_INVALID_ARG, esp_flash_write_encrypted(NULL, CONFIG_BOOTLOADER_OFFSET_IN_FLASH, buffer, sizeof(buffer)));
+    // Encrypted writes to partition table region not allowed
+    TEST_ASSERT_EQUAL_HEX(ESP_ERR_INVALID_ARG, esp_flash_write_encrypted(NULL, CONFIG_PARTITION_TABLE_OFFSET, buffer, sizeof(buffer)));
+}
 #endif // CONFIG_SECURE_FLASH_ENC_ENABLED

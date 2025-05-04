@@ -3,20 +3,17 @@ Analog to Digital Converter (ADC) Oneshot Mode Driver
 
 :link_to_translation:`zh_CN:[中文]`
 
-{IDF_TARGET_ADC_NUM:default="two", esp32c2="one", esp32c6="one", esp32h2="one"}
-
 Introduction
 ------------
 
 The Analog to Digital Converter is integrated on the chip and is capable of measuring analog signals from specific analog IO pins.
 
-{IDF_TARGET_NAME} has {IDF_TARGET_ADC_NUM} ADC unit(s), which can be used in scenario(s) like:
+{IDF_TARGET_NAME} has {SOC_ADC_PERIPH_NUM} ADC unit(s), which can be used in scenario(s) like:
 
-- Generate one-shot ADC conversion result
+.. list::
 
-.. only:: SOC_ADC_DMA_SUPPORTED
-
-    - Generate continuous ADC conversion results
+    - Generate one-shot ADC conversion result
+    :SOC_ADC_DMA_SUPPORTED: - Generate continuous ADC conversion results
 
 This guide introduces ADC oneshot mode conversion.
 
@@ -86,7 +83,7 @@ Unit Configuration
 
 After an ADC instance is created, set up the :cpp:type:`adc_oneshot_chan_cfg_t` to configure ADC IOs to measure analog signal:
 
-- :cpp:member:`adc_oneshot_chan_cfg_t::atten`, ADC attenuation. Refer to `TRM <{IDF_TARGET_TRM_EN_URL}>`__ > ``On-Chip Sensor and Analog Signal Processing``.
+- :cpp:member:`adc_oneshot_chan_cfg_t::atten`, ADC attenuation. Refer to `Datasheet <{IDF_TARGET_DATASHEET_EN_URL}>`__ > ``ADC Characteristics``.
 - :cpp:member:`adc_oneshot_chan_cfg_t::bitwidth`, the bitwidth of the raw conversion result.
 
 .. note::
@@ -142,7 +139,7 @@ where:
     * - Vmax
       - Maximum measurable input analog voltage, this is related to the ADC attenuation, please refer to `TRM <{IDF_TARGET_TRM_EN_URL}>`__ > ``On-Chip Sensor and Analog Signal Processing``.
     * - Dmax
-      -  Maximum of the output ADC raw digital reading result, which is 2^bitwidth, where bitwidth is the :cpp:member::`adc_oneshot_chan_cfg_t:bitwidth` configured before.
+      -  Maximum of the output ADC raw digital reading result, which is 2^bitwidth, where bitwidth is the :cpp:member:`adc_oneshot_chan_cfg_t::bitwidth` configured before.
 
 To do further calibration to convert the ADC raw result to voltage in mV, please refer to calibration doc :doc:`adc_calibration`.
 
@@ -164,31 +161,16 @@ Read Raw Result
 Hardware Limitations
 ^^^^^^^^^^^^^^^^^^^^
 
-- Random Number Generator (RNG) uses ADC as an input source. When ADC :cpp:func:`adc_oneshot_read` works, the random number generated from RNG will be less random.
+.. list::
 
-.. only:: SOC_ADC_DMA_SUPPORTED
+    - Random Number Generator (RNG) uses ADC as an input source. When ADC :cpp:func:`adc_oneshot_read` works, the random number generated from RNG will be less random.
+    :SOC_ADC_DMA_SUPPORTED: - A specific ADC unit can only work under one operating mode at any one time, either continuous mode or oneshot mode. :cpp:func:`adc_oneshot_read` has provided the protection.
+    :esp32 or esp32s2 or esp32s3: - ADC2 is also used by Wi-Fi. :cpp:func:`adc_oneshot_read` has provided protection between the Wi-Fi driver and ADC oneshot mode driver.
+    :esp32c3: - ADC2 oneshot mode is no longer supported, due to hardware limitations. The results are not stable. This issue can be found in `ESP32-C3 Series SoC Errata <https://www.espressif.com/sites/default/files/documentation/esp32-c3_errata_en.pdf>`_. For compatibility, you can enable :ref:`CONFIG_ADC_ONESHOT_FORCE_USE_ADC2_ON_C3` to force use ADC2.
+    :esp32: - ESP32-DevKitC: GPIO0 cannot be used in oneshot mode, because the DevKit has used it for auto-flash.
+    :esp32: - ESP-WROVER-KIT: GPIO 0, 2, 4, and 15 cannot be used due to external connections for different purposes.
 
-    - A specific ADC unit can only work under one operating mode at any one time, either continuous mode or oneshot mode. :cpp:func:`adc_oneshot_read` has provided the protection.
-
-.. only:: esp32 or esp32s2 or esp32s3
-
-    - ADC2 is also used by Wi-Fi. :cpp:func:`adc_oneshot_read` has provided protection between the Wi-Fi driver and ADC oneshot mode driver.
-
-.. only:: esp32c3
-
-    - ADC2 oneshot mode is no longer supported, due to hardware limitations. The results are not stable. This issue can be found in `ESP32-C3 Series SoC Errata <https://www.espressif.com/sites/default/files/documentation/esp32-c3_errata_en.pdf>`_. For compatibility, you can enable :ref:`CONFIG_ADC_ONESHOT_FORCE_USE_ADC2_ON_C3` to force use ADC2.
-
-.. only:: esp32
-
-    - ESP32-DevKitC: GPIO0 cannot be used in oneshot mode, because the DevKit has used it for auto-flash.
-
-    - ESP-WROVER-KIT: GPIO 0, 2, 4, and 15 cannot be used due to external connections for different purposes.
-
-    .. _adc-oneshot-power-management:
-
-.. only:: not esp32
-
-    .. _adc-oneshot-power-management:
+.. _adc-oneshot-power-management:
 
 Power Management
 ^^^^^^^^^^^^^^^^
@@ -229,7 +211,7 @@ Kconfig Options
 Application Examples
 --------------------
 
-* ADC oneshot mode example: :example:`peripherals/adc/oneshot_read`.
+* :example:`peripherals/adc/oneshot_read` demonstrates how to obtain a one-shot ADC reading from a GPIO pin using the ADC one-shot mode driver and how to use the ADC Calibration functions to obtain a calibrated result in mV on {IDF_TARGET_NAME}.
 
 
 API Reference

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "sdkconfig.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "semphr.h"
@@ -12,6 +13,7 @@
 #include "portTestMacro.h"
 
 /* ------------------------------------------------------------------------------------------------------------------ */
+#if SOC_GPTIMER_SUPPORTED
 
 /*
 Test vTaskDelay
@@ -79,7 +81,7 @@ TEST_CASE("Tasks: Test vTaskDelay", "[freertos]")
 {
     portTEST_REF_CLOCK_INIT();
 
-#if ( configNUM_CORES > 1 )
+#if ( CONFIG_FREERTOS_NUMBER_OF_CORES > 1 )
     vTestOnAllCores(test_vTaskDelay, NULL, configTEST_DEFAULT_STACK_SIZE, configTEST_UNITY_TASK_PRIORITY - 1);
 #else
     /* Test vTaskDelay directly on the current core */
@@ -166,7 +168,7 @@ TEST_CASE("Tasks: Test vTaskDelayUntil", "[freertos]")
 {
     portTEST_REF_CLOCK_INIT();
 
-#if ( configNUM_CORES > 1 )
+#if ( CONFIG_FREERTOS_NUMBER_OF_CORES > 1 )
     vTestOnAllCores(test_vTaskDelayUntil, NULL, configTEST_DEFAULT_STACK_SIZE, configTEST_UNITY_TASK_PRIORITY - 1);
 #else
     /* Test vTaskDelay directly on the current core */
@@ -177,3 +179,4 @@ TEST_CASE("Tasks: Test vTaskDelayUntil", "[freertos]")
 }
 
 #endif /* ( INCLUDE_xTaskDelayUntil == 1 ) */
+#endif //SOC_GPTIMER_SUPPORTED

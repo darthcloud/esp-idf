@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -12,16 +12,12 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "esp_err.h"
-#include "soc/gpio_periph.h"
 #include "soc/clk_tree_defs.h"
 #include "soc/soc_caps.h"
-#include "hal/gpio_hal.h"
 #include "hal/uart_ll.h"
 #include "esp_private/periph_ctrl.h"
-#include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/i2c_slave.h"
-#include "esp_rom_gpio.h"
 #include "esp_log.h"
 #include "test_utils.h"
 #include "test_board.h"
@@ -63,6 +59,8 @@ static void i2c_master_write_to_ram_test(void)
     i2c_master_dev_handle_t dev_handle;
     TEST_ESP_OK(i2c_master_bus_add_device(bus_handle, &dev_cfg, &dev_handle));
 
+    unity_send_signal("i2c master init first");
+
     unity_wait_for_signal("i2c slave init finish");
 
     unity_send_signal("master write");
@@ -81,6 +79,7 @@ static void i2c_master_write_to_ram_test(void)
 
 static void i2c_slave_read_from_ram_test(void)
 {
+    unity_wait_for_signal("i2c master init first");
     uint8_t data_rd[DATA_LENGTH_RAM] = {0};
 
     i2c_slave_config_t i2c_slv_config = {
@@ -135,6 +134,8 @@ static void master_read_slave_from_ram_test(void)
     i2c_master_dev_handle_t dev_handle;
     TEST_ESP_OK(i2c_master_bus_add_device(bus_handle, &dev_cfg, &dev_handle));
 
+    unity_send_signal("i2c master init first");
+
     unity_wait_for_signal("i2c slave init finish");
 
     printf("Slave please write data to buffer\n");
@@ -158,6 +159,7 @@ static void master_read_slave_from_ram_test(void)
 
 static void slave_write_buffer_to_ram_test(void)
 {
+    unity_wait_for_signal("i2c master init first");
     uint8_t data_wr[DATA_LENGTH_RAM] = {0};
 
     i2c_slave_config_t i2c_slv_config = {

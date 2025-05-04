@@ -3,6 +3,7 @@ menu "FreeRTOS"
     menu "Kernel"
         # Upstream FreeRTOS configurations go here
 
+
         config FREERTOS_SMP
             bool "Run the Amazon SMP FreeRTOS kernel instead (FEATURE UNDER DEVELOPMENT)"
             depends on !IDF_TARGET_ESP32P4 #TODO: IDF-8113: Enable P4 support on AMZ SMP
@@ -20,7 +21,7 @@ menu "FreeRTOS"
                 their implementation and features.
 
         config FREERTOS_UNICORE
-            # Todo: Replace with CONFIG_NUM_CORES (IDF-4986)
+            # Todo: Replace with CONFIG_NUMBER_OF_CORES (IDF-9156)
             bool "Run FreeRTOS only on first core"
             default "y" if IDF_TARGET_ESP32S2 || IDF_TARGET_LINUX
             select ESP_SYSTEM_SINGLE_CORE_MODE
@@ -116,7 +117,7 @@ menu "FreeRTOS"
                 - The FreeRTOS idle hook is NOT the same as the ESP-IDF Idle Hook, but both can be enabled
                   simultaneously.
 
-        config FREERTOS_USE_MINIMAL_IDLE_HOOK
+        config FREERTOS_USE_PASSIVE_IDLE_HOOK
             bool "Use FreeRTOS minimal idle hook"
             depends on FREERTOS_SMP
             default n
@@ -126,8 +127,8 @@ menu "FreeRTOS"
 
                 Note:
 
-                - The application must provide the hook function ``void vApplicationMinimalIdleHook( void );``
-                - ``vApplicationMinimalIdleHook()`` is called from FreeRTOS minimal idle task(s)
+                - The application must provide the hook function ``void vApplicationPassiveIdleHook( void );``
+                - ``vApplicationPassiveIdleHook()`` is called from FreeRTOS minimal idle task(s)
 
         config FREERTOS_USE_TICK_HOOK
             bool "configUSE_TICK_HOOK"
@@ -160,14 +161,32 @@ menu "FreeRTOS"
                 Enable backward compatibility with APIs prior to FreeRTOS v8.0.0. (see
                 configENABLE_BACKWARD_COMPATIBILITY documentation for more details).
 
+        config FREERTOS_USE_TIMERS
+            bool "configUSE_TIMERS"
+            default y
+            help
+                Enable FreeRTOS Software Timers. Normally the timer task will only get pulled into the build
+                and created if any software timer related functions are used. This is achieved through IDF
+                defining a weak empty function for xTimerCreateTimerTask, which should take effect if timers.c
+                is not pulled into the build.
+
+                In certain special cases (if you use configUSE_TRACE_FACILITY=y and event groups) the linker will
+                still pull in the xTimerCreateTimerTask from timers.c even if the function that utilized it gets
+                discarded due to not being used.
+
+                In these cases you can use this option to force the timer task to be disabled.
+
+
         config FREERTOS_TIMER_SERVICE_TASK_NAME
             string "configTIMER_SERVICE_TASK_NAME"
+            depends on FREERTOS_USE_TIMERS
             default "Tmr Svc"
             help
                 Sets the timer task's name (see configTIMER_SERVICE_TASK_NAME documentation for more details).
 
         choice FREERTOS_TIMER_SERVICE_TASK_CORE_AFFINITY
             prompt "configTIMER_SERVICE_TASK_CORE_AFFINITY"
+            depends on FREERTOS_USE_TIMERS
             default FREERTOS_TIMER_TASK_NO_AFFINITY
             help
                 Sets the timer task's core affinity
@@ -184,6 +203,7 @@ menu "FreeRTOS"
 
         config FREERTOS_TIMER_SERVICE_TASK_CORE_AFFINITY
             hex
+            depends on FREERTOS_USE_TIMERS
             default 0x0 if FREERTOS_TIMER_TASK_AFFINITY_CPU0
             default 0x1 if FREERTOS_TIMER_TASK_AFFINITY_CPU1
             default FREERTOS_NO_AFFINITY if FREERTOS_TIMER_TASK_NO_AFFINITY
@@ -192,12 +212,14 @@ menu "FreeRTOS"
             int "configTIMER_TASK_PRIORITY"
             range 1 25
             default 1
+            depends on FREERTOS_USE_TIMERS
             help
                 Sets the timer task's priority (see configTIMER_TASK_PRIORITY documentation for more details).
 
         config FREERTOS_TIMER_TASK_STACK_DEPTH
             int "configTIMER_TASK_STACK_DEPTH"
             range 1536 32768
+            depends on FREERTOS_USE_TIMERS
             default 2053 if IDF_TARGET_LINUX
             default 2048
             help
@@ -206,6 +228,7 @@ menu "FreeRTOS"
         config FREERTOS_TIMER_QUEUE_LENGTH
             int "configTIMER_QUEUE_LENGTH"
             range 5 20
+            depends on FREERTOS_USE_TIMERS
             default 10
             help
                 Set the timer task's command queue length (see configTIMER_QUEUE_LENGTH documentation for more
@@ -323,6 +346,13 @@ menu "FreeRTOS"
                 esp_pm_dump_locks, if the proportion of rejected sleeps is too high, please increase
                 this value to improve scheduling efficiency
 
+        config FREERTOS_USE_APPLICATION_TASK_TAG
+            bool "configUSE_APPLICATION_TASK_TAG"
+            default n
+            help
+                Enables task tagging functionality and its associated API (see configUSE_APPLICATION_TASK_TAG
+                documentation for more details).
+
     endmenu # Kernel
 
     menu "Port"
@@ -330,7 +360,9 @@ menu "FreeRTOS"
 
         config FREERTOS_TASK_FUNCTION_WRAPPER
             bool "Wrap task functions"
-            depends on COMPILER_OPTIMIZATION_DEBUG || ESP_COREDUMP_ENABLE || ESP_GDBSTUB_ENABLED
+            #TODO: Check if FreeRTOS Task Wrapper must depend on GDBStub (IDF-9505)
+            depends on COMPILER_OPTIMIZATION_DEBUG || ESP_COREDUMP_ENABLE \
+                || ESP_SYSTEM_PANIC_GDBSTUB || ESP_SYSTEM_GDBSTUB_RUNTIME
             default y
             help
                 If enabled, all FreeRTOS task functions will be enclosed in a wrapper function. If a task function
@@ -431,7 +463,7 @@ menu "FreeRTOS"
 
         config FREERTOS_FPU_IN_ISR
             bool "Use float in Level 1 ISR"
-            depends on IDF_TARGET_ESP32
+            depends on SOC_CPU_HAS_FPU && (IDF_TARGET_ESP32 || IDF_TARGET_ESP32S3)
             default n
             help
                 When enabled, the usage of float type is allowed inside Level 1 ISRs. Note that usage of float types in
@@ -531,6 +563,15 @@ menu "FreeRTOS"
                 When enabled the selected Non-ISR FreeRTOS functions will be placed into Flash memory instead of IRAM.
                 This saves up to 8KB of IRAM depending on which functions are used.
 
+        config FREERTOS_PLACE_ISR_FUNCTIONS_INTO_FLASH
+            bool "Place FreeRTOS functions called from ISR context into Flash"
+            depends on SPI_FLASH_AUTO_SUSPEND && FREERTOS_PLACE_FUNCTIONS_INTO_FLASH
+            default n
+            help
+                When enabled additional FreeRTOS functions which maybe called from an ISR context are
+                also placed in Flash, thus freeing up more IRAM.
+                This option is only applicable when the SPI_FLASH_AUTO_SUSPEND feature is supported.
+
         config FREERTOS_CHECK_PORT_CRITICAL_COMPLIANCE
             # Todo: Check if we still need this (IDF-4986)
             bool "Tests compliance with Vanilla FreeRTOS port*_CRITICAL calls"
@@ -540,6 +581,33 @@ menu "FreeRTOS"
                 Vanilla FreeRTOS. e.g Calling port*_CRITICAL from ISR context would cause assert failure
 
     endmenu # Port
+
+    menu "Extra"
+
+        config FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+            depends on SPIRAM
+            depends on FREERTOS_SUPPORT_STATIC_ALLOCATION
+            bool "Allow external memory as an argument to xTaskCreateStatic (READ HELP)"
+            default n if IDF_TARGET_ESP32
+            default y
+            help
+                Accessing memory in PSRAM has certain restrictions, so task stacks allocated by xTaskCreate
+                are by default allocated from internal RAM.
+
+                This option allows for passing memory allocated from SPIRAM to be passed to xTaskCreateStatic.
+                This should only be used for tasks where the stack is never accessed while the cache is disabled.
+
+                Extra notes for ESP32:
+
+                Because some bits of the ESP32 code environment cannot be recompiled with the cache workaround,
+                normally tasks cannot be safely run with their stack residing in external memory; for this reason
+                xTaskCreate (and related task creation functions) always allocate stack in internal memory and
+                xTaskCreateStatic will check if the memory passed to it is in internal memory.
+                If you have a task that needs a large amount of stack and does not call on ROM code in any way
+                (no direct calls, but also no Bluetooth/WiFi), you can try enable this to
+                cause xTaskCreateStatic to allow tasks stack in external memory.
+
+    endmenu  # Extra
 
     # Hidden or compatibility options
 
@@ -583,4 +651,17 @@ menu "FreeRTOS"
         default y
         depends on !ESP_PANIC_HANDLER_IRAM
 
+    config FREERTOS_NUMBER_OF_CORES
+        # Invisible option to configure the number of cores on which FreeRTOS runs
+        # Todo: Unhide this option and deprecate CONFIG_FREERTOS_UNICORE (IDF-9156)
+        int
+        range 1 2
+        default 1 if FREERTOS_UNICORE
+        default 2 if !FREERTOS_UNICORE
+
+    config FREERTOS_IN_IRAM
+        # Invisible option enabled by default to place all freertos functions in internal RAM
+        # Todo: See linker.lf (IDF-12695)
+        bool
+        default y
 endmenu # FreeRTOS

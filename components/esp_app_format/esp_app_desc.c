@@ -10,14 +10,21 @@
 #include "esp_app_desc.h"
 #include "sdkconfig.h"
 
-#include "hal/efuse_hal.h"
 #include "esp_log.h"
+
+// startup_internal.h is necessary for startup function definition, which does not exist on Linux (TODO: IDF-9950)
+#if !CONFIG_IDF_TARGET_LINUX && !ESP_TEE_BUILD
 #include "esp_private/startup_internal.h"
 
 static const char *TAG = "app_init";
+#endif
 
 // Application version info
+#if defined(__APPLE__) && CONFIG_IDF_TARGET_LINUX
+const __attribute__((weak)) __attribute__((section("__RODATA_DESC,.rodata_desc")))  esp_app_desc_t esp_app_desc = {
+#else
 const __attribute__((weak)) __attribute__((section(".rodata_desc")))  esp_app_desc_t esp_app_desc = {
+#endif /* #if defined(__APPLE__) && CONFIG_IDF_TARGET_LINUX */
     .magic_word = ESP_APP_DESC_MAGIC_WORD,
 #ifdef CONFIG_APP_EXCLUDE_PROJECT_VER_VAR
     .version = "",
@@ -32,6 +39,11 @@ const __attribute__((weak)) __attribute__((section(".rodata_desc")))  esp_app_de
 #endif
     .idf_ver = IDF_VER,
 
+// On Linux we just initialize the hash to some known value for testing
+#if CONFIG_IDF_TARGET_LINUX
+    .app_elf_sha256 = { 0xDE, 0xAD, 0xBE, 0xEF, 0x47, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B},
+#endif
+
 #ifdef CONFIG_BOOTLOADER_APP_SECURE_VERSION
     .secure_version = CONFIG_BOOTLOADER_APP_SECURE_VERSION,
 #else
@@ -45,6 +57,9 @@ const __attribute__((weak)) __attribute__((section(".rodata_desc")))  esp_app_de
     .time = "",
     .date = "",
 #endif
+    .min_efuse_blk_rev_full = CONFIG_ESP_EFUSE_BLOCK_REV_MIN_FULL,
+    .max_efuse_blk_rev_full = CONFIG_ESP_EFUSE_BLOCK_REV_MAX_FULL,
+    .mmu_page_size = 31 - __builtin_clz(CONFIG_MMU_PAGE_SIZE),
 };
 
 #ifndef CONFIG_APP_EXCLUDE_PROJECT_VER_VAR
@@ -101,6 +116,9 @@ int esp_app_get_elf_sha256(char* dst, size_t size)
     return n;
 }
 
+// startup function definition and execution does not exist on the Linux target
+// (TODO: IDF-9950)
+#if !CONFIG_IDF_TARGET_LINUX && !ESP_TEE_BUILD
 ESP_SYSTEM_INIT_FN(init_show_app_info, CORE, BIT(0), 20)
 {
     // Load the current ELF SHA256
@@ -116,7 +134,7 @@ ESP_SYSTEM_INIT_FN(init_show_app_info, CORE, BIT(0), 20)
         ESP_EARLY_LOGI(TAG, "App version:      %s", esp_app_desc.version);
 #endif
 #ifdef CONFIG_BOOTLOADER_APP_SECURE_VERSION
-        ESP_EARLY_LOGI(TAG, "Secure version:   %d", esp_app_desc.secure_version);
+        ESP_EARLY_LOGI(TAG, "Secure version:   %" PRIu32, esp_app_desc.secure_version);
 #endif
 #ifdef CONFIG_APP_COMPILE_TIME_DATE
         ESP_EARLY_LOGI(TAG, "Compile time:     %s %s", esp_app_desc.date, esp_app_desc.time);
@@ -125,13 +143,7 @@ ESP_SYSTEM_INIT_FN(init_show_app_info, CORE, BIT(0), 20)
         esp_app_get_elf_sha256(buf, sizeof(buf));
         ESP_EARLY_LOGI(TAG, "ELF file SHA256:  %s...", buf);
         ESP_EARLY_LOGI(TAG, "ESP-IDF:          %s", esp_app_desc.idf_ver);
-
-        // TODO: To be moved to the eFuse initialization routine
-        ESP_EARLY_LOGI(TAG, "Min chip rev:     v%d.%d", CONFIG_ESP_REV_MIN_FULL / 100, CONFIG_ESP_REV_MIN_FULL % 100);
-        ESP_EARLY_LOGI(TAG, "Max chip rev:     v%d.%d %s", CONFIG_ESP_REV_MAX_FULL / 100, CONFIG_ESP_REV_MAX_FULL % 100,
-                       efuse_hal_get_disable_wafer_version_major() ? "(constraint ignored)" : "");
-        unsigned revision = efuse_hal_chip_revision();
-        ESP_EARLY_LOGI(TAG, "Chip rev:         v%d.%d", revision / 100, revision % 100);
     }
     return ESP_OK;
 }
+#endif

@@ -3,16 +3,16 @@
 
 :link_to_translation:`en:[English]`
 
-ESP-IDF 软件引导加载程序 (Bootloader) 主要执行以下任务：
+ESP-IDF 二级引导加载程序 (second stage bootloader) 主要执行以下任务：
 
 1. 内部模块的最小化初始配置；
-2. 如果配置了 :doc:`/security/flash-encryption` 和/或 :doc:`Secure </security/secure-boot-v2>`，则对其进行初始化。
+2. 如果配置了 :doc:`/security/flash-encryption` 和/或 :doc:`Secure Boot </security/secure-boot-v2>`，则对其进行初始化。
 3. 根据分区表和 ota_data（如果存在）选择需要引导的应用程序 (app) 分区；
 4. 将此应用程序镜像加载到 RAM（IRAM 和 DRAM）中，最后把控制权转交给此应用程序。
 
-引导加载程序位于 flash 的 {IDF_TARGET_CONFIG_BOOTLOADER_OFFSET_IN_FLASH} 偏移地址处。
+ESP-IDF 二级引导加载程序位于 flash 的 {IDF_TARGET_CONFIG_BOOTLOADER_OFFSET_IN_FLASH} 偏移地址处。
 
-关于启动过程以及 ESP-IDF 引导加载程序的更多信息，请参考 :doc:`startup`。
+如需了解包括 ESP-IDF 二级引导加载程序在内的完整启动过程，请参考 :doc:`startup`。
 
 .. _bootloader-compatibility:
 
@@ -21,28 +21,28 @@ ESP-IDF 软件引导加载程序 (Bootloader) 主要执行以下任务：
 
 建议使用最新发布的 :doc:`ESP-IDF 版本 </versions>`。OTA（空中升级）更新可以在现场烧录新的应用程序，但不能烧录一个新的引导加载程序。因此，引导加载程序支持引导从 ESP-IDF 新版本中构建的应用程序。
 
-但不支持引导从 ESP-IDF 旧版本中构建的程序。如果现有产品可能需要将应用程序降级到旧版本，那么在手动更新 ESP-IDF 时，请继续使用旧版本 ESP-IDF 引导加载程序的二进制文件。
+但不支持引导从 ESP-IDF 旧版本中构建的程序。如果现有产品可能需要将应用程序降级到旧版本，那么在手动更新 ESP-IDF 时，请继续使用旧版本引导加载程序的二进制文件。
 
 .. note::
 
-   如果在生产中测试现有产品的 OTA 更新，请确保测试中使用的 ESP-IDF 引导加载程序二进制文件与生产中部署的相同。
+    如果在生产中测试现有产品的 OTA 更新，请确保测试中使用的引导加载程序二进制文件与生产中部署的相同。
 
 .. only:: esp32
 
-   ESP-IDF V2.1 之前的版本
-   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ESP-IDF V2.1 之前的版本
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-   与新版本相比，ESP-IDF V2.1 之前的版本构建的引导加载程序对硬件的配置更少。使用这些早期 ESP-IDF 版本的引导加载程序并构建新应用程序时，请启用配置选项 :ref:`CONFIG_APP_COMPATIBLE_PRE_V2_1_BOOTLOADERS`。
+    与新版本相比，ESP-IDF V2.1 之前的版本构建的引导加载程序对硬件的配置更少。使用这些早期 ESP-IDF 版本的引导加载程序并构建新应用程序时，请启用配置选项 :ref:`CONFIG_APP_COMPATIBLE_PRE_V2_1_BOOTLOADERS`。
 
-   ESP-IDF V3.1 之前的版本
-   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ESP-IDF V3.1 之前的版本
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-   ESP-IDF V3.1 之前的版本构建的引导加载程序不支持分区表二进制文件中的 MD5 校验。使用这些 ESP-IDF 版本的引导加载程序并构建新应用程序时，请启用配置选项 :ref:`CONFIG_APP_COMPATIBLE_PRE_V3_1_BOOTLOADERS`。
+    ESP-IDF V3.1 之前的版本构建的引导加载程序不支持分区表二进制文件中的 MD5 校验。使用这些 ESP-IDF 版本的引导加载程序并构建新应用程序时，请启用配置选项 :ref:`CONFIG_APP_COMPATIBLE_PRE_V3_1_BOOTLOADERS`。
 
-   ESP-IDF V5.1 之前的版本
-   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ESP-IDF V5.1 之前的版本
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-   ESP-IDF V5.1 之前的版本构建的引导加载程序不支持 :ref:`CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM`。使用这些 ESP-IDF 版本的引导加载程序并构建新应用程序时，不应使用该选项。
+    ESP-IDF V5.1 之前的版本构建的引导加载程序不支持 :ref:`CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM`。使用这些 ESP-IDF 版本的引导加载程序并构建新应用程序时，不应使用该选项。
 
 
 配置 SPI flash
@@ -50,11 +50,11 @@ ESP-IDF 软件引导加载程序 (Bootloader) 主要执行以下任务：
 
 每个 ESP-IDF 应用程序或引导加载程序的二进制文件中都包含一个文件头，其中内置了 :ref:`CONFIG_ESPTOOLPY_FLASHMODE`、:ref:`CONFIG_ESPTOOLPY_FLASHFREQ`、和 :ref:`CONFIG_ESPTOOLPY_FLASHSIZE`。这些是用于在启动时配置 SPI flash。
 
-ROM 中的 :ref:`first-stage-bootloader` 从 flash 中读取 :ref:`second-stage-bootloader` 文件头中的配置信息，并使用这些信息来加载剩余的 :ref:`second-stage-bootloader`。然而，此时系统的时钟速度低于其被配置的速度，并且在这个阶段，只支持部分 flash 模式。因此，当 :ref:`second-stage-bootloader` 运行时，它会从当前应用程序的二进制文件头中读取数据（而不是从引导加载程序的文件头中读取数据），并使用这些数据重新配置 flash。这样的配置流程可让 OTA 更新去更改当前使用的 SPI flash 的配置。
+:ref:`first-stage-bootloader` 从 flash 中读取 :ref:`second-stage-bootloader` 文件头中的配置信息，并使用这些信息来加载剩余的 :ref:`second-stage-bootloader`。然而，此时系统的时钟速度低于其被配置的速度，并且在这个阶段，只支持部分 flash 模式。因此，当 :ref:`second-stage-bootloader` 运行时，它会从当前应用程序的二进制文件头中读取数据（而不是从 :ref:`second-stage-bootloader` 的文件头中读取数据），并使用这些数据重新配置 flash。这样的配置流程可让 OTA 更新去更改当前使用的 SPI flash 的配置。
 
 .. only:: esp32
 
-   ESP-IDF V4.0 版本之前的引导加载程序使用其自身的文件头来配置 SPI flash，这意味着无法在 OTA 更新时更改 SPI flash 配置。为了与旧引导加载程序兼容，应用程序在其启动期间使用应用程序文件头中的配置信息重新初始化 flash 配置。
+    ESP-IDF V4.0 版本之前的引导加载程序使用其自身的文件头来配置 SPI flash，这意味着无法在 OTA 更新时更改 SPI flash 配置。为了与旧版本的引导加载程序兼容，应用程序在其启动期间使用应用程序文件头中的配置信息重新初始化 flash 配置。
 
 日志级别
 ---------
@@ -116,7 +116,7 @@ ROM 中的 :ref:`first-stage-bootloader` 从 flash 中读取 :ref:`second-stage-
 
 - :ref:`CONFIG_BOOTLOADER_NUM_PIN_APP_TEST` - 设置启动 TEST 分区的管脚编号，该管脚将被配置为输入并启用内部上拉。要触发测试应用，必须在重置时将此管脚拉低或拉高（可配置）。
 
-   释放管脚输入并重启设备后，将重新启用默认的启动顺序，即启动工厂分区或任意 OTA 应用分区槽。
+  释放管脚输入并重启设备后，将重新启用默认的启动顺序，即启动工厂分区或任意 OTA 应用分区槽。
 
 - :ref:`CONFIG_BOOTLOADER_HOLD_TIME_GPIO` - 设置 GPIO 电平保持的时间，默认为 5 秒。设备重置后，管脚电平必须保持该设定的时间，才能执行恢复出厂设置或引导测试分区（如适用）。
 
@@ -125,7 +125,7 @@ ROM 中的 :ref:`first-stage-bootloader` 从 flash 中读取 :ref:`second-stage-
 回滚
 --------
 
-回滚和反回滚功能也必须在引导程序中配置。
+回滚和反回滚功能也必须在引导加载程序中配置。
 
 请参考 :doc:`OTA API 参考文档 </api-reference/system/ota>` 中的 :ref:`app_rollback` 和 :ref:`anti-rollback` 章节。
 
@@ -157,27 +157,35 @@ ROM 中的 :ref:`first-stage-bootloader` 从 flash 中读取 :ref:`second-stage-
 
 可以使用如下方法解决此问题：
 
-- 将 :ref:`bootloader 编译器优化 <CONFIG_BOOTLOADER_COMPILER_OPTIMIZATION>` 重新设置回默认值“Size”。
+- 将 :ref:`引导加载程序编译器优化 <CONFIG_BOOTLOADER_COMPILER_OPTIMIZATION>` 重新设置回默认值“Size”。
 - 降低 :ref:`引导加载程序日志级别 <CONFIG_BOOTLOADER_LOG_LEVEL>`。将日志级别设置为 Warning, Error 或 None 都会显著减少最终二进制文件的大小（但也可能会让调试变得更加困难）。
 - 将 :ref:`CONFIG_PARTITION_TABLE_OFFSET` 设置为高于 0x8000 的值，以便稍后将分区表放置在 flash 中，这样可以增加引导加载程序的可用空间。如果 :doc:`分区表 </api-guides/partition-tables>` 的 CSV 文件包含明确的分区偏移量，则需要修改这些偏移量，从而保证没有分区的偏移量低于 ``CONFIG_PARTITION_TABLE_OFFSET + 0x1000``。（这包括随 ESP-IDF 提供的默认分区 CSV 文件）
 
 当启用 Secure Boot V2 时，由于引导加载程序最先加载到固定大小的缓冲区中进行验证，对二进制文件大小的绝对限制为 {IDF_TARGET_MAX_BOOTLOADER_SIZE}（不包括 4 KB 签名）。
 
+从深度睡眠中快速启动
+----------------------
+
+引导加载程序有 :ref:`CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP` 选项，可以减少从深度睡眠中唤醒的时间（有利于降低功耗）。当 :ref:`CONFIG_SECURE_BOOT` 选项禁用时，该选项可用。由于无需镜像校验，唤醒时间减少。
+
 .. only:: SOC_RTC_FAST_MEM_SUPPORTED
 
-    从深度睡眠中快速启动
-    ----------------------
+    在第一次启动时，引导加载程序将启动的应用程序的地址存储在 RTC FAST 存储器中。而在唤醒过程中，这个地址用于启动而无需任何检查，从而实现了快速加载。
 
-    引导加载程序有 :ref:`CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP` 选项，可以减少从深度睡眠中唤醒的时间（有利于降低功耗）。当 :ref:`CONFIG_SECURE_BOOT` 选项禁用时，该选项可用。由于无需镜像校验，唤醒时间减少。在第一次启动时，引导加载程序将启动的应用程序的地址存储在 RTC FAST 存储器中。而在唤醒过程中，这个地址用于启动而无需任何检查，从而实现了快速加载。
+.. only:: not SOC_RTC_FAST_MEM_SUPPORTED
+
+    {IDF_TARGET_NAME} 没有 RTC 存储器，因此无法存储正在运行的分区状态。每次唤醒会读取整个分区表，并加载正确的应用程序，而不进行额外的检查，因而使得加载速度更快。
 
 自定义引导加载程序
 ----------------------
 
 用户可以扩展或修改当前的引导加载程序，具体有两种方法：使用钩子实现或重写覆盖当前程序。这两种方法在 ESP-IDF 示例的 :example:`custom_bootloader` 文件夹中都有呈现。
 
-* `bootloader_hooks` 介绍了如何将钩子与引导加载程序初始化连接。
-* `bootloader_override` 介绍了如何覆盖引导加载程序的实现。
+* :example:`custom_bootloader/bootloader_hooks` 介绍了如何将钩子与引导加载程序初始化连接。
+* :example:`custom_bootloader/bootloader_override` 介绍了如何覆盖引导加载程序的实现。
 
-在引导加载程序的代码中，用户不能使用其他组件提供的驱动和函数，如果确实需要，请将该功能的实现部分放在项目的 `bootloader_components` 目录中（注意，这会增加引导加载程序的大小）。
+在引导加载程序的代码中，不能使用其他组件提供的驱动和函数，除非某个驱动或函数明确声明支持在引导加载程序中运行。如果确实需要，请将所需功能放在项目的 `bootloader_components` 目录中（注意，这会增加引导加载程序的大小）。以下是可以在引导加载程序中使用的组件示例：
 
-如果引导加载程序过大，则可能与内存中的分区表重叠，分区表默认烧录在偏移量 0x8000 处。增加 :ref:`分区表偏移量 <CONFIG_PARTITION_TABLE_OFFSET>` ，将分区表放在 flash 中靠后的区域，这样可以增加引导程序的可用空间。
+* :example:`storage/nvs/nvs_bootloader`
+
+如果引导加载程序过大，则可能与内存中的分区表重叠，分区表默认烧录在偏移量 0x8000 处。增加 :ref:`分区表偏移量 <CONFIG_PARTITION_TABLE_OFFSET>` ，将分区表放在 flash 中靠后的区域，这样可以增加引导加载程序的可用空间。

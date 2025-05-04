@@ -60,9 +60,9 @@ endif()
 
 if(CONFIG_HEAP_TRACING_TOHOST)
     list(APPEND srcs "heap_trace_tohost.c")
-    set_source_files_properties(heap_trace_tohost.c
-        PROPERTIES COMPILE_FLAGS
-        -Wno-frame-address)
+    if(CONFIG_IDF_TARGET_ARCH_XTENSA)
+        set_source_files_properties(heap_trace_tohost.c PROPERTIES COMPILE_FLAGS -Wno-frame-address)
+    endif()
 endif()
 
 idf_component_register(SRCS "${srcs}"
@@ -120,17 +120,4 @@ if(CONFIG_APPTRACE_GCOV_ENABLE)
     target_link_libraries(${COMPONENT_LIB} INTERFACE ${GCOV_LIB} $<TARGET_FILE:${app_trace}> c)
 else()
     target_link_libraries(${COMPONENT_LIB} INTERFACE $<TARGET_FILE:${app_trace}> c)
-endif()
-
-# This function adds a dependency on the given component if the component is included into the build.
-function(maybe_add_component component_name)
-    idf_build_get_property(components BUILD_COMPONENTS)
-    if(${component_name} IN_LIST components)
-        idf_component_get_property(lib_name ${component_name} COMPONENT_LIB)
-        target_link_libraries(${COMPONENT_LIB} PUBLIC ${lib_name})
-    endif()
-endfunction()
-
-if(CONFIG_APPTRACE_DEST_UART0 OR CONFIG_APPTRACE_DEST_UART1 OR CONFIG_APPTRACE_DEST_UART2)
-    maybe_add_component(driver)
 endif()

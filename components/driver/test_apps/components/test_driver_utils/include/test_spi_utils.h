@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -29,7 +29,6 @@
 
 #define TEST_SPI_PERIPH_NUM     (SOC_SPI_PERIPH_NUM - 1)
 
-
 #if CONFIG_IDF_TARGET_ESP32C6   // cs_pin conflict with uart pin
 #define PIN_NUM_MISO            SPI2_IOMUX_PIN_NUM_MISO
 #define PIN_NUM_MOSI            SPI2_IOMUX_PIN_NUM_MOSI
@@ -46,7 +45,6 @@
 #define PIN_NUM_HD              SPI2_IOMUX_PIN_NUM_HD
 #endif
 
-
 #if (TEST_SPI_PERIPH_NUM >= 2)  // esp32, s2, s3
 #define TEST_SPI_HOST           SPI2_HOST
 #define TEST_SLAVE_HOST         SPI3_HOST
@@ -61,7 +59,6 @@
 #define TEST_SPI_HOST           SPI2_HOST
 #define TEST_SLAVE_HOST         SPI2_HOST
 #endif
-
 
 #if CONFIG_IDF_TARGET_ESP32     // spi3 have iomux pin only on esp32
 #define SLAVE_IOMUX_PIN_MISO    SPI3_IOMUX_PIN_NUM_MISO
@@ -97,14 +94,7 @@
 #define WIRE_DELAY              12.5
 #endif  //CONFIG_IDF_TARGET_ESP32
 
-
-#define GET_DMA_CHAN(HOST)      (HOST)
-
-#define TEST_DMA_CHAN_MASTER    GET_DMA_CHAN(TEST_SPI_HOST)
-#define TEST_DMA_CHAN_SLAVE     GET_DMA_CHAN(TEST_SLAVE_HOST)
-
-
-#define FUNC_SPI    1
+#define FUNC_SPI    SPI2_FUNC_NUM
 #define FUNC_GPIO   PIN_FUNC_GPIO
 
 //Delay information
@@ -167,9 +157,10 @@
         .flags=0,\
     }
 
-//default device config for slave hd devices
+//default device config for slave hd devices, DMA is always required for slave hd
 #define SPI_SLOT_TEST_DEFAULT_CONFIG() {\
         .spics_io_num = PIN_NUM_CS, \
+        .dma_chan = SPI_DMA_CH_AUTO, \
         .flags = 0, \
         .mode = 0, \
         .command_bits = 8,\
@@ -266,7 +257,7 @@ esp_err_t spitest_check_data(int len, spi_transaction_t *master_t, slave_rxdata_
     int r = memcmp(expected, actual, len);\
     if (r != 0) {\
         ESP_LOG_BUFFER_HEXDUMP("actual ", actual, len, ESP_LOG_WARN);\
-        ESP_LOG_BUFFER_HEXDUMP("expecte", expected, len, ESP_LOG_INFO);\
+        ESP_LOG_BUFFER_HEXDUMP("expected", expected, len, ESP_LOG_INFO);\
         TEST_ASSERT_EQUAL_HEX8_ARRAY(expected, actual, len);\
     }\
     r;\
@@ -274,7 +265,7 @@ esp_err_t spitest_check_data(int len, spi_transaction_t *master_t, slave_rxdata_
 
 static inline int get_trans_len(spi_dup_t dup, spi_transaction_t *master_t)
 {
-    if (dup!=HALF_DUPLEX_MISO) {
+    if (dup != HALF_DUPLEX_MISO) {
         return master_t->length;
     } else {
         return master_t->rxlength;
@@ -283,14 +274,26 @@ static inline int get_trans_len(spi_dup_t dup, spi_transaction_t *master_t)
 //remove device from bus and free the bus
 void master_free_device_bus(spi_device_handle_t spi);
 
-//use this function to fix the output source when assign multiple funcitons to a same pin
+//use this function to fix the output source when assign multiple functions to a same pin
 void spitest_gpio_output_sel(uint32_t gpio_num, int func, uint32_t signal_idx);
 
-//use this function to fix the input source when assign multiple funcitons to a same pin
+//use this function to fix the input source when assign multiple functions to a same pin
 void spitest_gpio_input_sel(uint32_t gpio_num, int func, uint32_t signal_idx);
 
 //Note this cs_num is the ID of the connected devices' ID, e.g. if 2 devices are connected to the bus,
 //then the cs_num of the 1st and 2nd devices are 0 and 1 respectively.
-void same_pin_func_sel(spi_bus_config_t bus, spi_device_interface_config_t dev, uint8_t cs_num);
+//Enable `soft_master` to connect to soft spi master instead of hardware master.
+void same_pin_func_sel(spi_bus_config_t bus, uint8_t cs_pin, uint8_t cs_dev_id, bool soft_master);
+
+// Soft simulated spi master host for slave testing
+// `speed_hz` max 500kHz
+// TODO: mode 0 only
+void spi_master_trans_impl_gpio(spi_bus_config_t bus, uint8_t cs_pin, uint32_t speed_hz, uint8_t *tx, uint8_t *rx, uint32_t len, bool hold_cs);
+
+// Send/Receive long buffer by soft spi master in segments to the slave_hd through its DMA, refer to `essl_spi_wrdma/essl_spi_rddma`
+void essl_sspi_hd_dma_trans_seg(spi_bus_config_t bus, uint8_t cs_pin, uint32_t speed_hz, bool is_rx, void *buffer, int len, int seg_len);
+
+// Write/Read the shared buffer of the slave_hd by soft spi master, refer to `essl_spi_wrbuf/essl_spi_rdbuf`
+void essl_sspi_hd_buffer_trans(spi_bus_config_t bus, uint8_t cs_pin, uint32_t speed_hz, spi_command_t cmd, uint8_t addr, void *buffer, uint32_t len);
 
 #endif  //_TEST_COMMON_SPI_H_

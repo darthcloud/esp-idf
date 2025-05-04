@@ -35,6 +35,7 @@
   # Add folders excluded by "???[!t]" and "??[!s]?"
   # pre-commit: tools/ci/check_rules_components_patterns.py
   - "components/bt/host/**/*"
+  - "components/esp_psram/system_layer/*"
 
 .patterns-downloadable-tools: &patterns-downloadable-tools
   - "tools/idf_tools.py"
@@ -66,6 +67,9 @@
   - "tools/ci/check_esp_memory_utils_headers.sh"
   - "tools/ci/check_blobs.sh"
   - "tools/ci/check_public_headers.py"
+  - "tools/ci/check_register_rw_half_word.cmake"
+  - "tools/ci/check_register_rw_half_word.py"
+  - "examples/build_system/**/*"
 
 .patterns-host_test: &patterns-host_test
   - ".gitlab/ci/host-test.yml"
@@ -81,17 +85,27 @@
 
   - "tools/idf_monitor.py"
 
+  - "tools/activate.py"
+
   - "tools/idf.py"
   - "tools/idf_py_actions/**/*"
   - "tools/test_idf_py/**/*"
 
   - "tools/idf_size.py"
+  - "tools/test_idf_size/**/*"
+
+  - "tools/test_idf_diag/**/*"
 
   - "tools/tools.json"
   - "tools/tools_schema.json"
   - "tools/idf_tools.py"
   - "tools/test_idf_tools/**/*"
   - "tools/install_util.py"
+
+  - "tools/export_utils/utils.py"
+  - "tools/export_utils/shell_types.py"
+  - "tools/export_utils/console_output.py"
+  - "tools/export_utils/activate_venv.py"
 
   - "tools/requirements/*"
   - "tools/requirements.json"
@@ -105,14 +119,17 @@
   - "tools/detect_python.sh"
   - "tools/detect_python.fish"
 
-  - "tools/ci/test_reproducible_build.sh"
-
   - "tools/gen_soc_caps_kconfig/*"
   - "tools/gen_soc_caps_kconfig/test/test_gen_soc_caps_kconfig.py"
 
   - "tools/mkuf2.py"
 
   - "tools/split_paths_by_spaces.py"
+
+  - "tools/check_python_dependencies.py"
+
+  - "tools/bsasm.py"
+  - "tools/test_bsasm/**/*"
 
 .patterns-docker: &patterns-docker
   - "tools/docker/**/*"
@@ -139,17 +156,22 @@
   - "components/unity/unity"
   - "components/heap/tlsf"
   - "components/bt/controller/lib_esp32c6/esp32c6-bt-lib"
+  - "components/bt/controller/lib_esp32c5/esp32c5-bt-lib"
   - "components/bt/esp_ble_mesh/lib/lib"
   - ".gitmodules"
 
 .patterns-idf-pytest-plugin: &patterns-idf-pytest-plugin
   - "tools/ci/idf_pytest/**/*"
+  - "tools/ci/dynamic_pipelines/tests/**/*"
 
 ##############
 # if anchors #
 ##############
 .if-ref-master: &if-ref-master
   if: '$CI_COMMIT_REF_NAME == "master"'
+
+.if-ref-master-no_label: &if-ref-master-no_label
+  if: '$CI_COMMIT_REF_NAME == "master" && $BOT_TRIGGER_WITH_LABEL == null'
 
 .if-tag-release: &if-tag-release
   if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+(\.\d+)?($|-)/'
@@ -202,6 +224,11 @@
       when: never
     - <<: *if-protected-no_label
 
+# Not uploading on release branches
+.rules:sync_support_status:
+  rules:
+    - <<: *if-ref-master-no_label
+
 .rules:protected-no_label-always:
   rules:
     - <<: *if-qa-test-tag
@@ -212,6 +239,10 @@
 .rules:tag:release:
   rules:
     - <<: *if-tag-release
+
+.rules:dev-push:
+  rules:
+    - <<: *if-dev-push
 
 # Do not upload caches on dev branches by default
 .rules:upload-python-cache:
@@ -239,20 +270,15 @@
     - <<: *if-dev-push
       changes: *patterns-c-files
 
-.rules:patterns:python-files:
-  rules:
-    - <<: *if-protected
-    - <<: *if-dev-push
-      changes: *patterns-python-files
 
-.rules:patterns:static-code-analysis-preview:
-  rules:
-    - <<: *if-dev-push
-      changes: *patterns-c-files
-    - <<: *if-dev-push
-      changes: *patterns-python-files
-    - <<: *if-dev-push
-      changes: *patterns-sonarqube-files
+#.rules:patterns:static-code-analysis-preview:
+#  rules:
+#    - <<: *if-dev-push
+#      changes: *patterns-c-files
+#    - <<: *if-dev-push
+#      changes: *patterns-python-files
+#    - <<: *if-dev-push
+#      changes: *patterns-sonarqube-files
 
 .rules:patterns:idf-pytest-plugin:
   rules:
@@ -382,6 +408,8 @@
       when: never
     - <<: *if-schedule-test-build-system-windows
     - <<: *if-label-windows
+    - <<: *if-dev-push
+      changes: *patterns-build_system
 
 .rules:test:host_test:
   rules:

@@ -51,6 +51,10 @@ config SOC_PCNT_SUPPORTED
     bool
     default y
 
+config SOC_PHY_SUPPORTED
+    bool
+    default y
+
 config SOC_WIFI_SUPPORTED
     bool
     default y
@@ -168,6 +172,22 @@ config SOC_SPI_FLASH_SUPPORTED
     default y
 
 config SOC_RNG_SUPPORTED
+    bool
+    default y
+
+config SOC_LIGHT_SLEEP_SUPPORTED
+    bool
+    default y
+
+config SOC_DEEP_SLEEP_SUPPORTED
+    bool
+    default y
+
+config SOC_LP_PERIPH_SHARE_INTERRUPT
+    bool
+    default y
+
+config SOC_PM_SUPPORTED
     bool
     default y
 
@@ -335,7 +355,19 @@ config SOC_GPIO_CLOCKOUT_BY_IO_MUX
     bool
     default y
 
+config SOC_GPIO_CLOCKOUT_CHANNEL_NUM
+    int
+    default 3
+
+config SOC_GPIO_SUPPORT_HOLD_IO_IN_DSLP
+    bool
+    default y
+
 config SOC_I2C_NUM
+    int
+    default 2
+
+config SOC_HP_I2C_NUM
     int
     default 2
 
@@ -352,6 +384,10 @@ config SOC_I2C_SUPPORT_SLAVE
     default y
 
 config SOC_I2C_SUPPORT_APB
+    bool
+    default y
+
+config SOC_I2C_SUPPORT_10BIT_ADDR
     bool
     default y
 
@@ -383,13 +419,21 @@ config SOC_I2S_SUPPORTS_PDM_TX
     bool
     default y
 
-config SOC_I2S_PDM_MAX_TX_LINES
-    int
-    default 1
+config SOC_I2S_SUPPORTS_PCM2PDM
+    bool
+    default y
 
 config SOC_I2S_SUPPORTS_PDM_RX
     bool
     default y
+
+config SOC_I2S_SUPPORTS_PDM2PCM
+    bool
+    default y
+
+config SOC_I2S_PDM_MAX_TX_LINES
+    int
+    default 1
 
 config SOC_I2S_PDM_MAX_RX_LINES
     int
@@ -410,6 +454,10 @@ config SOC_I2S_SUPPORTS_DAC
 config SOC_I2S_SUPPORTS_LCD_CAMERA
     bool
     default y
+
+config SOC_I2S_MAX_DATA_WIDTH
+    int
+    default 24
 
 config SOC_I2S_TRANS_SIZE_ALIGN_WORD
     bool
@@ -446,6 +494,10 @@ config SOC_LEDC_SUPPORT_REF_TICK
 config SOC_LEDC_SUPPORT_HS_MODE
     bool
     default y
+
+config SOC_LEDC_TIMER_NUM
+    int
+    default 4
 
 config SOC_LEDC_CHANNEL_NUM
     int
@@ -667,6 +719,14 @@ config SOC_TIMER_GROUP_SUPPORT_APB
     bool
     default y
 
+config SOC_LP_TIMER_BIT_WIDTH_LO
+    int
+    default 32
+
+config SOC_LP_TIMER_BIT_WIDTH_HI
+    int
+    default 16
+
 config SOC_TOUCH_SENSOR_VERSION
     int
     default 1
@@ -675,7 +735,19 @@ config SOC_TOUCH_SENSOR_NUM
     int
     default 10
 
-config SOC_TOUCH_SAMPLER_NUM
+config SOC_TOUCH_MIN_CHAN_ID
+    int
+    default 0
+
+config SOC_TOUCH_MAX_CHAN_ID
+    int
+    default 9
+
+config SOC_TOUCH_SUPPORT_SLEEP_WAKEUP
+    bool
+    default y
+
+config SOC_TOUCH_SAMPLE_CFG_NUM
     int
     default 1
 
@@ -718,6 +790,10 @@ config SOC_UART_FIFO_LEN
 config SOC_UART_BITRATE_MAX
     int
     default 5000000
+
+config SOC_UART_WAKEUP_SUPPORT_ACTIVE_THRESH_MODE
+    bool
+    default y
 
 config SOC_SPIRAM_SUPPORTED
     bool
@@ -835,6 +911,10 @@ config SOC_CONFIGURABLE_VDDSDIO_SUPPORTED
     bool
     default y
 
+config SOC_PM_MODEM_PD_BY_SW
+    bool
+    default y
+
 config SOC_CLK_APLL_SUPPORTED
     bool
     default y
@@ -852,6 +932,10 @@ config SOC_CLK_RC_FAST_SUPPORT_CALIBRATION
     default y
 
 config SOC_CLK_XTAL32K_SUPPORTED
+    bool
+    default y
+
+config SOC_CLK_LP_FAST_SUPPORT_XTAL_D4
     bool
     default y
 
@@ -900,6 +984,10 @@ config SOC_BLE_DEVICE_PRIVACY_SUPPORTED
     default n
 
 config SOC_BLUFI_SUPPORTED
+    bool
+    default y
+
+config SOC_BT_H2C_ENC_KEY_CTRL_ENH_VSC_SUPPORTED
     bool
     default y
 

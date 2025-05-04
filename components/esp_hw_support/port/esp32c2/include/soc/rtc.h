@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -258,6 +258,11 @@ void rtc_clk_xtal_freq_update(soc_xtal_freq_t xtal_freq);
 void rtc_clk_32k_enable_external(void);
 
 /**
+ * @brief Disable 32KHz external oscillator
+ */
+void rtc_clk_32k_disable_external(void);
+
+/**
  * @brief Enable or disable 8 MHz internal oscillator
  *
  * Output from 8 MHz internal oscillator is passed into a configurable
@@ -504,6 +509,14 @@ bool rtc_dig_8m_enabled(void);
 uint32_t rtc_clk_freq_cal(uint32_t cal_val);
 
 /**
+ * @brief Calculate the slow clock period value by slow clock frequency
+ *
+ * @param freq_hz Frequency of the slow clock in Hz
+ * @return Fixed point value of slow clock period in microseconds
+ */
+uint32_t rtc_clk_freq_to_period(uint32_t freq_hz);
+
+/**
  * @brief Power down flags for rtc_sleep_pd function
  */
 typedef struct {
@@ -562,6 +575,7 @@ typedef struct {
 #define RTC_SLEEP_DIG_USE_8M            BIT(16)
 #define RTC_SLEEP_USE_ADC_TESEN_MONITOR BIT(17)
 #define RTC_SLEEP_NO_ULTRA_LOW          BIT(18) //!< Avoid using ultra low power in deep sleep, in which RTCIO cannot be used as input, and RTCMEM can't work under high temperature
+#define RTC_SLEEP_XTAL_AS_RTC_FAST      BIT(19)
 
 /**
  * Default initializer for rtc_sleep_config_t
@@ -597,8 +611,9 @@ void rtc_sleep_init(rtc_sleep_config_t cfg);
  * used in lightsleep mode.
  *
  * @param slowclk_period re-calibrated slow clock period
+ * @param dslp true if initialize for deepsleep request
  */
-void rtc_sleep_low_init(uint32_t slowclk_period);
+void rtc_sleep_low_init(uint32_t slowclk_period, bool dslp);
 
 #define RTC_GPIO_TRIG_EN            BIT(2)  //!< GPIO wakeup
 #define RTC_TIMER_TRIG_EN           BIT(3)  //!< Timer wakeup
@@ -714,7 +729,7 @@ typedef soc_rtc_slow_clk_src_t rtc_slow_freq_t;
  * @brief RTC FAST_CLK frequency values
  */
 typedef soc_rtc_fast_clk_src_t rtc_fast_freq_t;
-#define RTC_FAST_FREQ_XTALD4 SOC_RTC_FAST_CLK_SRC_XTAL_DIV  //!< Main XTAL, divided by 2
+#define RTC_FAST_FREQ_XTALD4 SOC_RTC_FAST_CLK_SRC_XTAL_D2  //!< Main XTAL, divided by 2
 #define RTC_FAST_FREQ_8M SOC_RTC_FAST_CLK_SRC_RC_FAST       //!< Internal 17.5 MHz RC oscillator
 
 /**

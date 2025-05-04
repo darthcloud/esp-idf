@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -38,7 +38,7 @@ static inline uint32_t periph_ll_get_clk_en_mask(periph_module_t periph)
             return PCR_I2C0_CLK_EN;
         case PERIPH_I2C1_MODULE:
             return PCR_I2C1_CLK_EN;
-        case PERIPH_I2S1_MODULE:
+        case PERIPH_I2S0_MODULE:
             return PCR_I2S_CLK_EN;
         case PERIPH_TIMG0_MODULE:
             return PCR_TG0_CLK_EN;
@@ -78,8 +78,6 @@ static inline uint32_t periph_ll_get_clk_en_mask(periph_module_t periph)
             return PCR_ECDSA_CLK_EN;
         case PERIPH_TEMPSENSOR_MODULE:
             return PCR_TSENS_CLK_EN;
-        case PERIPH_REGDMA_MODULE:
-            return PCR_REGDMA_CLK_EN;
         // case PERIPH_RNG_MODULE:
         //     return PCR_WIFI_CLK_RNG_EN;
         // case PERIPH_WIFI_MODULE:
@@ -121,7 +119,7 @@ static inline uint32_t periph_ll_get_rst_en_mask(periph_module_t periph, bool en
             return PCR_I2C0_RST_EN;
         case PERIPH_I2C1_MODULE:
             return PCR_I2C1_RST_EN;
-        case PERIPH_I2S1_MODULE:
+        case PERIPH_I2S0_MODULE:
             return PCR_I2S_RST_EN;
         case PERIPH_TIMG0_MODULE:
             return PCR_TG0_RST_EN;
@@ -153,8 +151,6 @@ static inline uint32_t periph_ll_get_rst_en_mask(periph_module_t periph, bool en
                 CLEAR_PERI_REG_MASK(PCR_ECDSA_CONF_REG, PCR_ECDSA_RST_EN);
             }
             return PCR_ECC_RST_EN;
-        case PERIPH_REGDMA_MODULE:
-            return PCR_REGDMA_RST_EN;
         case PERIPH_AES_MODULE:
             if (enable == true) {
                 // Clear reset on digital signature, otherwise AES unit is held in reset
@@ -228,7 +224,7 @@ static inline uint32_t periph_ll_get_clk_en_reg(periph_module_t periph)
             return PCR_I2C0_CONF_REG;
         case PERIPH_I2C1_MODULE:
             return PCR_I2C1_CONF_REG;
-        case PERIPH_I2S1_MODULE:
+        case PERIPH_I2S0_MODULE:
             return PCR_I2S_CONF_REG;
         case PERIPH_TIMG0_MODULE:
             return PCR_TIMERGROUP0_CONF_REG;
@@ -268,8 +264,6 @@ static inline uint32_t periph_ll_get_clk_en_reg(periph_module_t periph)
             return PCR_ECDSA_CONF_REG;
         case PERIPH_TEMPSENSOR_MODULE:
             return PCR_TSENS_CLK_CONF_REG;
-        case PERIPH_REGDMA_MODULE:
-            return PCR_REGDMA_CONF_REG;
         case PERIPH_ASSIST_DEBUG_MODULE:
             return PCR_ASSIST_CONF_REG;
     default:
@@ -297,7 +291,7 @@ static inline uint32_t periph_ll_get_rst_en_reg(periph_module_t periph)
             return PCR_I2C0_CONF_REG;
         case PERIPH_I2C1_MODULE:
             return PCR_I2C1_CONF_REG;
-        case PERIPH_I2S1_MODULE:
+        case PERIPH_I2S0_MODULE:
             return PCR_I2S_CONF_REG;
         case PERIPH_TIMG0_MODULE:
             return PCR_TIMERGROUP0_CONF_REG;
@@ -337,8 +331,6 @@ static inline uint32_t periph_ll_get_rst_en_reg(periph_module_t periph)
             return PCR_ECDSA_CONF_REG;
         case PERIPH_TEMPSENSOR_MODULE:
             return PCR_TSENS_CLK_CONF_REG;
-        case PERIPH_REGDMA_MODULE:
-            return PCR_REGDMA_CONF_REG;
         case PERIPH_ASSIST_DEBUG_MODULE:
             return PCR_ASSIST_CONF_REG;
     default:

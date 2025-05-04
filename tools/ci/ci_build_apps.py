@@ -1,10 +1,8 @@
-# SPDX-FileCopyrightText: 2021-2023 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
-
 """
 This file is used in CI generate binary files for different kinds of apps
 """
-
 import argparse
 import os
 import sys
@@ -14,10 +12,14 @@ from pathlib import Path
 
 import yaml
 from dynamic_pipelines.constants import DEFAULT_TEST_PATHS
-from idf_build_apps import build_apps, setup_logging
+from idf_build_apps import build_apps
+from idf_build_apps import setup_logging
 from idf_build_apps.utils import semicolon_separated_str_to_list
-from idf_pytest.constants import (DEFAULT_BUILD_TEST_RULES_FILEPATH, DEFAULT_CONFIG_RULES_STR,
-                                  DEFAULT_FULL_BUILD_TEST_FILEPATTERNS, DEFAULT_IGNORE_WARNING_FILEPATH)
+from idf_pytest.constants import DEFAULT_BUILD_TEST_RULES_FILEPATH
+from idf_pytest.constants import DEFAULT_CONFIG_RULES_STR
+from idf_pytest.constants import DEFAULT_FULL_BUILD_TEST_COMPONENTS
+from idf_pytest.constants import DEFAULT_FULL_BUILD_TEST_FILEPATTERNS
+from idf_pytest.constants import DEFAULT_IGNORE_WARNING_FILEPATH
 from idf_pytest.script import get_all_apps
 
 CI_ENV_VARS = {
@@ -26,6 +28,7 @@ CI_ENV_VARS = {
     'EXTRA_CXXFLAGS': '-Werror -Werror=deprecated-declarations -Werror=unused-variable '
     '-Werror=unused-but-set-variable -Werror=unused-function',
     'LDGEN_CHECK_MAPPING': '1',
+    'IDF_CI_BUILD': '1',
 }
 
 
@@ -46,8 +49,9 @@ def main(args: argparse.Namespace) -> None:
         filter_expr=args.filter_expr,
         preserve_all=args.preserve_all,
         extra_default_build_targets=extra_default_build_targets,
-        modified_files=args.modified_components,
-        modified_components=args.modified_files,
+        modified_files=args.modified_files,
+        modified_components=args.modified_components,
+        ignore_app_dependencies_components=args.ignore_app_dependencies_components,
         ignore_app_dependencies_filepatterns=args.ignore_app_dependencies_filepatterns,
     )
 
@@ -80,6 +84,7 @@ def main(args: argparse.Namespace) -> None:
         copy_sdkconfig=args.copy_sdkconfig,
         modified_components=args.modified_components,
         modified_files=args.modified_files,
+        ignore_app_dependencies_components=args.ignore_app_dependencies_components,
         ignore_app_dependencies_filepatterns=args.ignore_app_dependencies_filepatterns,
         junitxml=args.junitxml,
     )
@@ -193,6 +198,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--modified-components',
         type=semicolon_separated_str_to_list,
+        default=os.getenv('MR_MODIFIED_COMPONENTS'),
         help='semicolon-separated string which specifies the modified components. '
         'app with `depends_components` set in the corresponding manifest files would only be built '
         'if depends on any of the specified components. '
@@ -202,9 +208,22 @@ if __name__ == '__main__':
     parser.add_argument(
         '--modified-files',
         type=semicolon_separated_str_to_list,
+        default=os.getenv('MR_MODIFIED_FILES'),
         help='semicolon-separated string which specifies the modified files. '
         'app with `depends_filepatterns` set in the corresponding manifest files would only be built '
         'if any of the specified file pattern matches any of the specified modified files. '
+        'If set to "", the value would be considered as None. '
+        'If set to ";", the value would be considered as an empty list',
+    )
+    parser.add_argument(
+        '-ic',
+        '--ignore-app-dependencies-components',
+        type=semicolon_separated_str_to_list,
+        help='semicolon-separated string which specifies the modified components used for '
+        'ignoring checking the app dependencies. '
+        'The `depends_components` and `depends_filepatterns` set in the manifest files will be ignored '
+        'when any of the specified components matches any of the modified components. '
+        'Must be used together with --modified-components. '
         'If set to "", the value would be considered as None. '
         'If set to ";", the value would be considered as an empty list',
     )
@@ -214,8 +233,8 @@ if __name__ == '__main__':
         type=semicolon_separated_str_to_list,
         help='semicolon-separated string which specifies the file patterns used for '
         'ignoring checking the app dependencies. '
-        'The `depends_components` and `depends_filepatterns` set in the manifest files '
-        'will be ignored when any of the specified file patterns matches any of the modified files. '
+        'The `depends_components` and `depends_filepatterns` set in the manifest files will be ignored '
+        'when any of the specified file patterns matches any of the modified files. '
         'Must be used together with --modified-files. '
         'If set to "", the value would be considered as None. '
         'If set to ";", the value would be considered as an empty list',
@@ -237,19 +256,29 @@ if __name__ == '__main__':
     # skip setting flags in CI
     if not arguments.skip_setting_flags and not os.getenv('CI_JOB_ID'):
         for _k, _v in CI_ENV_VARS.items():
-            os.environ[_k] = _v
+            os.environ[_k] = _v  # type: ignore
             print(f'env var {_k} set to "{_v}"')
 
     if os.getenv('IS_MR_PIPELINE') == '0' or os.getenv('BUILD_AND_TEST_ALL_APPS') == '1':
-        # if it's not MR pipeline or env var BUILD_AND_TEST_ALL_APPS=1,
-        # remove component dependency related arguments
+        print('Build and run all test cases, and compile all cmake apps')
         arguments.modified_components = None
         arguments.modified_files = None
+        arguments.ignore_app_dependencies_components = None
         arguments.ignore_app_dependencies_filepatterns = None
+    else:
+        print(
+            f'Build and run only test cases matching:\n'
+            f'- modified components: {arguments.modified_components}\n'
+            f'- modified files: {arguments.modified_files}'
+        )
 
-    # default file patterns to tigger full build
-    if arguments.modified_files is not None and arguments.ignore_app_dependencies_filepatterns is None:
-        arguments.ignore_app_dependencies_filepatterns = DEFAULT_FULL_BUILD_TEST_FILEPATTERNS
+        if arguments.modified_components is not None and not arguments.ignore_app_dependencies_components:
+            # setting default values
+            arguments.ignore_app_dependencies_components = DEFAULT_FULL_BUILD_TEST_COMPONENTS
+
+        if arguments.modified_files is not None and not arguments.ignore_app_dependencies_filepatterns:
+            # setting default values
+            arguments.ignore_app_dependencies_filepatterns = DEFAULT_FULL_BUILD_TEST_FILEPATTERNS
 
     main(arguments)
 

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -12,10 +12,12 @@
 #include <stdlib.h>
 
 #include "soc/soc_caps.h"
+#include "soc/clk_tree_defs.h"
 
 #if SOC_PMU_SUPPORTED
 #include "hal/pmu_hal.h"
 #include "pmu_param.h"
+#include "pmu_bit_defs.h"
 #endif
 
 #ifdef __cplusplus
@@ -45,12 +47,14 @@ typedef enum {
 #define RTC_SLEEP_PD_MODEM              PMU_SLEEP_PD_MODEM      //!< Power down modem(include wifi, ble and 15.4)
 
 //These flags are not power domains, but will affect some sleep parameters
-#define RTC_SLEEP_DIG_USE_8M            BIT(16)
-#define RTC_SLEEP_USE_ADC_TESEN_MONITOR BIT(17)
-#define RTC_SLEEP_NO_ULTRA_LOW          BIT(18) //!< Avoid using ultra low power in deep sleep, in which RTCIO cannot be used as input, and RTCMEM can't work under high temperature
+#define RTC_SLEEP_DIG_USE_8M            BIT(27)
+#define RTC_SLEEP_USE_ADC_TESEN_MONITOR BIT(28)
+#define RTC_SLEEP_NO_ULTRA_LOW          BIT(29) //!< Avoid using ultra low power in deep sleep, in which RTCIO cannot be used as input, and RTCMEM can't work under high temperature
+#define RTC_SLEEP_XTAL_AS_RTC_FAST      BIT(30)
+#define RTC_SLEEP_LP_PERIPH_USE_XTAL    BIT(31)
 
 #if SOC_PM_SUPPORT_EXT0_WAKEUP
-#define RTC_EXT0_TRIG_EN            PMU_EXT0_WAKEUP_EN                       //!< EXT0 wakeup
+#define RTC_EXT0_TRIG_EN            PMU_EXT0_WAKEUP_EN      //!< EXT0 wakeup
 #else
 #define RTC_EXT0_TRIG_EN            0
 #endif
@@ -61,7 +65,11 @@ typedef enum {
 #define RTC_EXT1_TRIG_EN            0
 #endif
 
-#define RTC_GPIO_TRIG_EN            PMU_GPIO_WAKEUP_EN      //!< GPIO wakeup
+#if SOC_LP_IO_HAS_INDEPENDENT_WAKEUP_SOURCE
+#define RTC_GPIO_TRIG_EN            (PMU_GPIO_WAKEUP_EN | PMU_LP_GPIO_WAKEUP_EN)      //!< GPIO & LP_GPIO wakeup
+#else
+#define RTC_GPIO_TRIG_EN            (PMU_GPIO_WAKEUP_EN)
+#endif
 
 #if SOC_LP_TIMER_SUPPORTED
 #define RTC_TIMER_TRIG_EN           PMU_LP_TIMER_WAKEUP_EN  //!< Timer wakeup
@@ -78,15 +86,27 @@ typedef enum {
 #if SOC_UART_SUPPORT_WAKEUP_INT
 #define RTC_UART0_TRIG_EN           PMU_UART0_WAKEUP_EN     //!< UART0 wakeup (light sleep only)
 #define RTC_UART1_TRIG_EN           PMU_UART1_WAKEUP_EN     //!< UART1 wakeup (light sleep only)
+#if SOC_UART_HP_NUM > 2
+#define RTC_UART2_TRIG_EN           PMU_UART2_WAKEUP_EN     //!< UART2 wakeup (light sleep only)
+#else
+#define RTC_UART2_TRIG_EN           0
+#endif
 #else
 #define RTC_UART0_TRIG_EN           0
 #define RTC_UART1_TRIG_EN           0
+#define RTC_UART2_TRIG_EN           0
 #endif
 
 #if SOC_BT_SUPPORTED
 #define RTC_BT_TRIG_EN              PMU_BLE_SOC_WAKEUP_EN   //!< BT wakeup (light sleep only)
 #else
 #define RTC_BT_TRIG_EN              0
+#endif
+
+#if SOC_TOUCH_SENSOR_SUPPORTED
+#define RTC_TOUCH_TRIG_EN           PMU_TOUCH_WAKEUP_EN     //!< TOUCH wakeup
+#else
+#define RTC_TOUCH_TRIG_EN           0
 #endif
 
 #define RTC_USB_TRIG_EN             PMU_USB_WAKEUP_EN
@@ -96,6 +116,12 @@ typedef enum {
 #else
 #define RTC_LP_CORE_TRIG_EN         0
 #endif //SOC_LP_CORE_SUPPORTED
+
+#if SOC_LP_VAD_SUPPORTED
+#define RTC_LP_VAD_TRIG_EN          PMU_LP_I2S_WAKEUP_EN   //!< LP VAD wakeup
+#else
+#define RTC_LP_VAD_TRIG_EN          0
+#endif //SOC_LP_VAD_SUPPORTED
 
 #define RTC_XTAL32K_DEAD_TRIG_EN    0 // TODO
 #define RTC_BROWNOUT_DET_TRIG_EN    0 // TODO
@@ -110,31 +136,14 @@ typedef enum {
                                RTC_WIFI_TRIG_EN         | \
                                RTC_UART0_TRIG_EN        | \
                                RTC_UART1_TRIG_EN        | \
+                               RTC_UART2_TRIG_EN        | \
                                RTC_BT_TRIG_EN           | \
                                RTC_LP_CORE_TRIG_EN      | \
+                               RTC_TOUCH_TRIG_EN        | \
                                RTC_XTAL32K_DEAD_TRIG_EN | \
                                RTC_USB_TRIG_EN          | \
+                               RTC_LP_VAD_TRIG_EN       | \
                                RTC_BROWNOUT_DET_TRIG_EN)
-
-#if SOC_PM_SUPPORT_EXT0_WAKEUP
-#define PMU_EXT0_WAKEUP_EN          BIT(0)
-#endif
-#if SOC_PM_SUPPORT_EXT1_WAKEUP
-#define PMU_EXT1_WAKEUP_EN          BIT(1)
-#endif
-
-#define PMU_GPIO_WAKEUP_EN          BIT(2)
-#define PMU_WIFI_BEACON_WAKEUP_EN   BIT(3)
-#define PMU_LP_TIMER_WAKEUP_EN      BIT(4)
-#define PMU_WIFI_SOC_WAKEUP_EN      BIT(5)
-#define PMU_UART0_WAKEUP_EN         BIT(6)
-#define PMU_UART1_WAKEUP_EN         BIT(7)
-#define PMU_SDIO_WAKEUP_EN          BIT(8)
-#define PMU_BLE_SOC_WAKEUP_EN       BIT(10)
-#if SOC_LP_CORE_SUPPORTED
-#define PMU_LP_CORE_WAKEUP_EN       BIT(11)
-#endif //SOC_LP_CORE_SUPPORTED
-#define PMU_USB_WAKEUP_EN           BIT(14)
 
 
 #define PMU_SLEEP_PD_TOP            BIT(0)
@@ -158,18 +167,16 @@ typedef enum {
 #define PMU_SLEEP_PD_RC32K          BIT(13)
 #define PMU_SLEEP_PD_LP_PERIPH      BIT(14)
 
+#if SOC_PM_SUPPORT_CNNT_PD
+#define PMU_SLEEP_PD_CNNT           BIT(15)
+#endif
+
 typedef struct {
     pmu_hal_context_t *hal;
     void *mc;
 } pmu_context_t;
 
 pmu_context_t * PMU_instance(void);
-
-typedef enum pmu_hp_sysclk_src {
-    PMU_HP_SYSCLK_XTAL = 0,
-    PMU_HP_SYSCLK_PLL,
-    PMU_HP_SYSCLK_FOSC
-} pmu_hp_sysclk_src_t;
 
 typedef enum pmu_sleep_protect_mode {
     PMU_SLEEP_PROTECT_HP_SLEEP = 0,
@@ -204,21 +211,46 @@ void pmu_sleep_disable_regdma_backup(void);
 bool pmu_sleep_pll_already_enabled(void);
 
 /**
- * @brief Calculate the hardware time overhead during sleep to compensate for sleep time
+ * @brief Calculate the LP system hardware time overhead during sleep
  *
- * @param pd_flags flags indicates the power domain that will be powered down
+ * @param sleep_flags flags indicates the power domain that will be powered down and the sleep submode
  * @param slowclk_period re-calibrated slow clock period
  * @param fastclk_period re-calibrated fast clock period
  *
  * @return hardware time overhead in us
  */
-uint32_t pmu_sleep_calculate_hw_wait_time(uint32_t pd_flags, uint32_t slowclk_period, uint32_t fastclk_period);
+uint32_t pmu_sleep_calculate_lp_hw_wait_time(uint32_t sleep_flags, uint32_t slowclk_period, uint32_t fastclk_period);
+
+/**
+ * @brief Calculate the HP system hardware time overhead during sleep
+ *
+ * @param sleep_flags flags indicates the power domain that will be powered down and the sleep submode
+ * @param slowclk_period re-calibrated slow clock period
+ * @param fastclk_period re-calibrated fast clock period
+ *
+ * @return hardware time overhead in us
+ */
+uint32_t pmu_sleep_calculate_hp_hw_wait_time(uint32_t sleep_flags, uint32_t slowclk_period, uint32_t fastclk_period);
+
+/**
+ * @brief Calculate the hardware time overhead during sleep to compensate for sleep time
+ *
+ * @param sleep_flags flags indicates the power domain that will be powered down and the sleep submode
+ * @param slowclk_src slow clock source of pmu
+ * @param slowclk_period re-calibrated slow clock period
+ * @param fastclk_period re-calibrated fast clock period
+ *
+ * @return hardware time overhead in us
+ */
+uint32_t pmu_sleep_calculate_hw_wait_time(uint32_t sleep_flags, soc_rtc_slow_clk_src_t slowclk_src, uint32_t slowclk_period, uint32_t fastclk_period);
 
 /**
  * @brief Get default sleep configuration
  * @param config pmu_sleep_config instance
- * @param pd_flags flags indicates the power domain that will be powered down
+ * @param sleep_flags flags indicates the power domain that will be powered down and the sleep submode
+ * @param clk_flags indicates the clock ICG cell that will be ungated
  * @param adjustment total software and hardware time overhead
+ * @param slowclk_src slow clock source of pmu
  * @param slowclk_period re-calibrated slow clock period in microseconds,
  *                       Q13.19 fixed point format
  * @param fastclk_period re-calibrated fast clock period in microseconds,
@@ -227,7 +259,7 @@ uint32_t pmu_sleep_calculate_hw_wait_time(uint32_t pd_flags, uint32_t slowclk_pe
 
  * @return hardware time overhead in us
  */
-const pmu_sleep_config_t* pmu_sleep_config_default(pmu_sleep_config_t *config, uint32_t pd_flags, uint32_t adjustment, uint32_t slowclk_period, uint32_t fastclk_period, bool dslp);
+const pmu_sleep_config_t* pmu_sleep_config_default(pmu_sleep_config_t *config, uint32_t sleep_flags, uint32_t clk_flags, uint32_t adjustment, soc_rtc_slow_clk_src_t slowclk_src, uint32_t slowclk_period, uint32_t fastclk_period, bool dslp);
 
 /**
  * @brief Prepare the chip to enter sleep mode
@@ -245,6 +277,20 @@ const pmu_sleep_config_t* pmu_sleep_config_default(pmu_sleep_config_t *config, u
  * @param dslp is initialize for deep sleep mode
  */
 void pmu_sleep_init(const pmu_sleep_config_t *config, bool dslp);
+
+#if SOC_DCDC_SUPPORTED
+/**
+ * @brief Increase hp_ldo voltage, in preparation for taking over the power supply from DCDC
+ */
+void pmu_sleep_increase_ldo_volt(void);
+
+/**
+ * @brief LDO has taken over power supply, shut down DCDC to save power consumption and goto sleep
+ *        and after shutdown the DCDC, it is also necessary to decrease the LDO voltage to save
+ *        power in the sleep and wake-up processes.
+ */
+void pmu_sleep_shutdown_dcdc(void);
+#endif // SOC_DCDC_SUPPORTED
 
 /**
  * @brief Enter deep or light sleep mode
@@ -276,9 +322,10 @@ uint32_t pmu_sleep_start(uint32_t wakeup_opt, uint32_t reject_opt, uint32_t lslp
 
 /**
  * @brief   Finish sleep process settings and get sleep reject status
+ * @param   dslp True if sleep requests id deep-sleep
  * @return  return sleep reject status
  */
-bool pmu_sleep_finish(void);
+bool pmu_sleep_finish(bool dslp);
 
 /**
  * @brief Initialize PMU related power/clock/digital parameters and functions

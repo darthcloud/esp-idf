@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -36,15 +36,21 @@ esp_eth_mac_t *mac_init(void *vendor_emac_config, eth_mac_config_t *mac_config)
 #if CONFIG_TARGET_USE_INTERNAL_ETHERNET
     eth_esp32_emac_config_t esp32_emac_config = ETH_ESP32_EMAC_DEFAULT_CONFIG();
 #if !CONFIG_TARGET_USE_DEFAULT_EMAC_CONFIG
-    esp32_emac_config.smi_mdc_gpio_num = CONFIG_TARGET_IO_MDC;
-    esp32_emac_config.smi_mdio_gpio_num = CONFIG_TARGET_IO_MDIO;
+    esp32_emac_config.smi_gpio.mdc_num = CONFIG_TARGET_IO_MDC;
+    esp32_emac_config.smi_gpio.mdio_num = CONFIG_TARGET_IO_MDIO;
 #endif // CONFIG_TARGET_USE_DEFAULT_EMAC_CONFIG
+#if CONFIG_TARGET_RMII_CLK_OUT
+    esp32_emac_config.clock_config.rmii.clock_mode = EMAC_CLK_OUT;
+    esp32_emac_config.clock_config.rmii.clock_gpio = CONFIG_TARGET_RMII_CLK_OUT_GPIO;
+    esp32_emac_config.clock_config_out_in.rmii.clock_mode = EMAC_CLK_EXT_IN;
+    esp32_emac_config.clock_config_out_in.rmii.clock_gpio = CONFIG_TARGET_RMII_CLK_IN_GPIO;
+#endif // CONFIG_TARGET_TEST_RMII_CLK_OUT
     if (vendor_emac_config == NULL) {
         vendor_emac_config = &esp32_emac_config;
     }
     mac = esp_eth_mac_new_esp32(vendor_emac_config, mac_config);
 #elif CONFIG_TARGET_USE_SPI_ETHERNET
-    // Install GPIO ISR handler to be able to service SPI Eth modlues interrupts
+    // Install GPIO ISR handler to be able to service SPI Eth modules interrupts
     gpio_install_isr_service(0);
 
     spi_bus_config_t buscfg = {

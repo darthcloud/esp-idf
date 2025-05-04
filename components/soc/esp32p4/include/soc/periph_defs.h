@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -68,9 +68,15 @@ typedef enum {
     PERIPH_AXI_PDMA_MODULE,
     PERIPH_UHCI_MODULE,
     PERIPH_PCNT_MODULE,
+    PERIPH_ASSIST_DEBUG_MODULE,
+    PERIPH_BITSCRAMBLER_MODULE,
     /* LP peripherals */
     PERIPH_LP_I2C0_MODULE,
     PERIPH_LP_UART0_MODULE,
+
+    /* MISC */
+    PERIPH_ANA_I2C_MASTER_MODULE,
+
     PERIPH_MODULE_MAX
 } periph_module_t;
 

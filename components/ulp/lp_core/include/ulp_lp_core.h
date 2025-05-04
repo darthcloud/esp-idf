@@ -22,6 +22,7 @@ extern "C" {
 #define ULP_LP_CORE_WAKEUP_SOURCE_LP_IO     BIT(2) // Enable wake-up by LP IO interrupt
 #define ULP_LP_CORE_WAKEUP_SOURCE_ETM       BIT(3) // Enable wake-up by ETM event
 #define ULP_LP_CORE_WAKEUP_SOURCE_LP_TIMER  BIT(4) // Enable wake-up by LP timer
+#define ULP_LP_CORE_WAKEUP_SOURCE_LP_VAD    BIT(5) // Enable wake-up by LP VAD
 
 /**
  * @brief ULP LP core init parameters
@@ -31,9 +32,9 @@ typedef struct {
     uint32_t wakeup_source;                  /*!< Wakeup source flags */
     uint32_t lp_timer_sleep_duration_us;     /*!< Sleep duration when ULP_LP_CORE_WAKEUP_SOURCE_LP_TIMER is specified. Measurement unit: us */
 #if ESP_ROM_HAS_LP_ROM
-    bool    skip_lp_rom_boot;               /* !< Skips the LP rom code and boots directly into the app code placed in LP RAM,
-                                                  this gives faster boot time for time sensitive use-cases at the cost of skipping
-                                                  setup e.g. of UART */
+    bool    skip_lp_rom_boot;               /*!< Skips the LP rom code and boots directly into the app code placed in LP RAM,
+                                                 this gives faster boot time for time sensitive use-cases at the cost of skipping
+                                                 setup e.g. of UART */
 #endif //ESP_ROM_HAS_LP_ROM
 } ulp_lp_core_cfg_t;
 
@@ -62,6 +63,14 @@ esp_err_t ulp_lp_core_load_binary(const uint8_t* program_binary, size_t program_
  *        wake up trigger.
  */
 void ulp_lp_core_stop(void);
+
+/**
+ * @brief Trigger a SW interrupt to the LP CPU from the PMU
+ *
+ * @note This is the same SW trigger that is used to wake up the LP CPU
+ *
+ */
+void ulp_lp_core_sw_intr_trigger(void);
 
 #ifdef __cplusplus
 }

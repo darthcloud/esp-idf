@@ -21,7 +21,7 @@ extern "C" {
  *
  * 2) External 26/40MHz Crystal Clock: XTAL
  *
- * 3) Internal 136kHz RC Oscillator: RC_SLOW (usually referrred as RTC in TRM or reg. description)
+ * 3) Internal 136kHz RC Oscillator: RC_SLOW (usually referred as RTC in TRM or reg. description)
  *
  *    This RC oscillator generates a ~136kHz clock signal output as the RC_SLOW_CLK. The exact frequency of this clock
  *    can be computed in runtime through calibration.
@@ -82,9 +82,12 @@ typedef enum {
  */
 typedef enum {
     SOC_RTC_FAST_CLK_SRC_XTAL_D2 = 0,      /*!< Select XTAL_D2_CLK (may referred as XTAL_CLK_DIV_2) as RTC_FAST_CLK source */
-    SOC_RTC_FAST_CLK_SRC_XTAL_DIV = SOC_RTC_FAST_CLK_SRC_XTAL_D2, /*!< Alias name for `SOC_RTC_FAST_CLK_SRC_XTAL_D2` */
     SOC_RTC_FAST_CLK_SRC_RC_FAST = 1,      /*!< Select RC_FAST_CLK as RTC_FAST_CLK source */
     SOC_RTC_FAST_CLK_SRC_INVALID,          /*!< Invalid RTC_FAST_CLK source */
+
+    SOC_RTC_FAST_CLK_SRC_DEFAULT = SOC_RTC_FAST_CLK_SRC_XTAL_D2, /*!< XTAL_D2_CLK is the default clock source for RTC_FAST_CLK */
+
+    SOC_RTC_FAST_CLK_SRC_XTAL_DIV __attribute__((deprecated)) = SOC_RTC_FAST_CLK_SRC_XTAL_D2, /*!< Alias name for `SOC_RTC_FAST_CLK_SRC_XTAL_D2` */
 } soc_rtc_fast_clk_src_t;
 
 /**
@@ -202,9 +205,6 @@ typedef enum {
     UART_SCLK_DEFAULT = SOC_MOD_CLK_PLL_F40M,  /*!< UART source clock default choice is PLL_F40M */
 } soc_periph_uart_clk_src_legacy_t;
 
-/////////////////////////////////////////////////I2C////////////////////////////////////////////////////////////////////
-
-
 /////////////////////////////////////////////////SPI////////////////////////////////////////////////////////////////////
 
 /**
@@ -220,6 +220,8 @@ typedef enum {
     SPI_CLK_SRC_PLL_F40M = SOC_MOD_CLK_PLL_F40M,     /*!< Select PLL_40M as SPI source clock */
     SPI_CLK_SRC_XTAL = SOC_MOD_CLK_XTAL,            /*!< Select XTAL as SPI source clock */
 } soc_periph_spi_clk_src_t;
+
+/////////////////////////////////////////////////I2C////////////////////////////////////////////////////////////////////
 
 /**
  * @brief Array initializer for all supported clock sources of I2C
@@ -265,7 +267,6 @@ typedef enum {
     GLITCH_FILTER_CLK_SRC_APB = SOC_MOD_CLK_APB,     /*!< Select APB clock as the source clock */
     GLITCH_FILTER_CLK_SRC_DEFAULT = SOC_MOD_CLK_APB, /*!< Select APB clock as the default clock choice */
 } soc_periph_glitch_filter_clk_src_t;
-
 
 //////////////////////////////////////////////////MWDT/////////////////////////////////////////////////////////////////
 

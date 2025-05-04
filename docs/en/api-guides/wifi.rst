@@ -74,6 +74,34 @@ Generally, the most effective way to begin your own Wi-Fi application is to sele
 
 This article is supplementary to the Wi-Fi APIs/Examples. It describes the principles of using the Wi-Fi APIs, the limitations of the current Wi-Fi API implementation, and the most common pitfalls in using Wi-Fi. This article also reveals some design details of the Wi-Fi driver. We recommend you to select an :example:`example <wifi>`.
 
+- :example:`wifi/getting_started/station` demonstrates how to use the station functionality to connect to an AP.
+
+- :example:`wifi/getting_started/softAP` demonstrates how to use the SoftAP functionality to configure {IDF_TARGET_NAME} as an AP.
+
+- :example:`wifi/scan` demonstrates how to scan for available APs, configure the scan settings, and display the scan results.
+
+- :example:`wifi/fast_scan` demonstrates how to perform fast and all channel scans for nearby APs, set thresholds for signal strength and authentication modes, and connect to the best fitting AP based on signal strength and authentication mode.
+
+- :example:`wifi/wps` demonstrates how to use the WPS enrollee feature to simplify the process of connecting to a Wi-Fi router, with options for PIN or PBC modes.
+
+- :example:`wifi/wps_softap_registrar` demonstrates how to use the WPS registrar feature on SoftAP mode, simplifying the process of connecting to a Wi-Fi SoftAP from a station.
+
+- :example:`wifi/smart_config` demonstrates how to use the smartconfig feature to connect to a target AP using the ESPTOUCH app.
+
+- :example:`wifi/power_save` demonstrates how to use the power save mode in station mode.
+
+- :example:`wifi/softap_sta` demonstrates how to configure {IDF_TARGET_NAME} to function as both an AP and a station simultaneously, effectively enabling it to act as a Wi-Fi NAT router.
+
+- :example:`wifi/iperf` demonstrates how to implement the protocol used by the iPerf performance measurement tool, allowing for performance measurement between two chips or between a single chip and a computer running the iPerf tool, with specific instructions for testing station/soft-AP TCP/UDP RX/TX throughput.
+
+- :example:`wifi/roaming/roaming_app` demonstrates how to use the Wi-Fi Roaming App functionality to efficiently roam between compatible APs.
+
+- :example:`wifi/roaming/roaming_11kvr` demonstrates how to implement roaming using 11k and 11v APIs.
+
+.. only:: SOC_WIFI_HE_SUPPORT
+
+    - :example:`wifi/itwt` demonstrates how to use the iTWT feature, which only works in station mode and under different power save modes, with commands for setup, teardown, and suspend, and also shows the difference in current consumption when iTWT is enabled or disabled.
+
 Setting Wi-Fi Compile-time Options
 ++++++++++++++++++++++++++++++++++++
 
@@ -247,7 +275,7 @@ Another thing that deserves attention is that the default behavior of LwIP is to
 - Five seconds later, the Wi-Fi connection is restored because :cpp:func:`esp_wifi_connect()` is called in the application event callback function. **Moreover, the station connects to the same AP and gets the same IPV4 address as before**.
 - Sixty seconds later, when the application sends out data with the keep-alive socket, the socket returns an error and the application closes the socket and re-creates it when necessary.
 
-In above scenarios, ideally, the application sockets and the network layer should not be affected, since the Wi-Fi connection only fails temporarily and recovers very quickly. The application can enable "Keep TCP connections when IP changed" via LwIP menuconfig.
+In above scenarios, ideally, the application sockets and the network layer should not be affected, since the Wi-Fi connection only fails temporarily and recovers very quickly.
 
 IP_EVENT_STA_GOT_IP
 ++++++++++++++++++++++++++++++++++++
@@ -811,7 +839,7 @@ Association Phase
 +++++++++++++++++++++
 
  - s3.1: The association request is sent and the association timer is enabled.
- - s3.2: If the association response is not received before the association timer times out, `WIFI_EVENT_STA_DISCONNECTED`_ will arise and the reason code will be ``WIFI_REASON_ASSOC_EXPIRE``. Refer to `Wi-Fi Reason Code`_.
+ - s3.2: If the association response is not received before the association timer times out, `WIFI_EVENT_STA_DISCONNECTED`_ will arise and the reason code will be ``WIFI_REASON_DISASSOC_DUE_TO_INACTIVITY``. Refer to `Wi-Fi Reason Code`_.
  - s3.3: The association response is received and the association timer is stopped.
  - s3.4: The AP rejects the association in the response and `WIFI_EVENT_STA_DISCONNECTED`_ arises, while the reason code is the one specified in the association response. Refer to `Wi-Fi Reason Code`_.
 
@@ -876,19 +904,15 @@ Following reason codes are renamed to their shorter form to wrap the table in pa
        For the ESP station, this reason is reported when:
 
        - it is received from the AP.
-   * - ASSOC_EXPIRE
+   * - DISASSOC_DUE_TO_INACTIVITY
      - 4
      - Disassociated due to inactivity.
 
        For the ESP station, this reason is reported when:
 
+       - assoc is timed out.
        - it is received from the AP.
 
-       For the ESP AP, this reason is reported when:
-
-       - the AP has not received any packets from the station in the past five minutes.
-       - the AP is stopped by calling :cpp:func:`esp_wifi_stop()`.
-       - the station is de-authed by calling :cpp:func:`esp_wifi_deauth_sta()`.
    * - ASSOC_TOOMANY
      - 5
      - Disassociated, because the AP is unable to handle all currently associated STAs at the same time.
@@ -900,7 +924,7 @@ Following reason codes are renamed to their shorter form to wrap the table in pa
        For the ESP AP, this reason is reported when:
 
        - the stations associated with the AP reach the maximum number that the AP can support.
-   * - NOT_AUTHED
+   * - CLASS2_FRAME_FROM_NONAUTH_STA
      - 6
      - Class-2 frame received from a non-authenticated STA.
 
@@ -911,7 +935,7 @@ Following reason codes are renamed to their shorter form to wrap the table in pa
        For the ESP AP, this reason is reported when:
 
        - the AP receives a packet with data from a non-authenticated station.
-   * - NOT_ASSOCED
+   * - CLASS3_FRAME_FROM_NONASSOC_STA
      - 7
      - Class-3 frame received from a non-associated STA.
 
@@ -1138,7 +1162,7 @@ Following reason codes are renamed to their shorter form to wrap the table in pa
      - Espressif-specific Wi-Fi reason code: the authentication fails, but not because of a timeout.
    * - ASSOC_FAIL
      - 203
-     - Espressif-specific Wi-Fi reason code: the association fails, but not because of ASSOC_EXPIRE or ASSOC_TOOMANY.
+     - Espressif-specific Wi-Fi reason code: the association fails, but not because of DISASSOC_DUE_TO_INACTIVITY or ASSOC_TOOMANY.
    * - HANDSHAKE_TIMEOUT
      - 204
      - Espressif-specific Wi-Fi reason code: the handshake fails for the same reason as that in WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT.
@@ -1671,7 +1695,7 @@ Wi-Fi Easy Connect™ (DPP)
 Wi-Fi Easy Connect\ :sup:`TM` (or Device Provisioning Protocol) is a secure and standardized provisioning protocol for configuring Wi-Fi devices. More information can be found in :doc:`esp_dpp <../api-reference/network/esp_dpp>`.
 
 WPA2-Enterprise
-+++++++++++++++++++++++++++++++++
+---------------
 
 WPA2-Enterprise is the secure authentication mechanism for enterprise wireless networks. It uses RADIUS server for authentication of network users before connecting to the Access Point. The authentication process is based on 802.1X policy and comes with different Extended Authentication Protocol (EAP) methods such as TLS, TTLS, and PEAP. RADIUS server authenticates the users based on their credentials (username and password), digital certificates, or both. When {IDF_TARGET_NAME} in station mode tries to connect an AP in enterprise mode, it sends authentication request to AP which is sent to RADIUS server by AP for authenticating the station. Based on different EAP methods, the parameters can be set in configuration which can be opened using ``idf.py menuconfig``. WPA2_Enterprise is supported by {IDF_TARGET_NAME} only in station mode.
 
@@ -1746,14 +1770,20 @@ A config option :ref:`CONFIG_ESP_WIFI_11R_SUPPORT` and configuration parameter :
     - {IDF_TARGET_NAME} as FTM Initiator in station mode.
     - {IDF_TARGET_NAME} as FTM Responder in AP mode.
 
-    Distance measurement using RTT is not accurate, and factors such as RF interference, multi-path travel, antenna orientation, and lack of calibration increase these inaccuracies. For better results, it is suggested to perform FTM between two ESP32 chip series devices (except ESP32-C2) as station and AP.
+.. only:: esp32c6
+
+   {IDF_TARGET_NAME} ECO1 and older versions do not support FTM Initiator mode.
+
+.. attention::
+
+    Distance measurement using RTT is not accurate, and factors such as RF interference, multi-path travel, antenna orientation, and lack of calibration increase these inaccuracies. For better results, it is suggested to perform FTM between two ESP32 chip series devices as station and AP.
 
     Refer to ESP-IDF example :idf_file:`examples/wifi/ftm/README.md` for steps on how to set up and perform FTM.
 
 {IDF_TARGET_NAME} Wi-Fi Power-saving Mode
 -----------------------------------------
 
-This subsection will briefly introduce the concepts and usage related to Wi-Fi Power Saving Mode, for a more detailed introduction please refer to the :doc:`Low Power Mode User Guide <../api-guides/low-power-mode>`
+This subsection will briefly introduce the concepts and usage related to Wi-Fi Power Saving Mode, for a more detailed introduction please refer to the :doc:`Low Power Mode User Guide <../api-guides/low-power-mode/index>`
 
 Station Sleep
 ++++++++++++++++++++++
@@ -1823,7 +1853,11 @@ At the start of `Interval` time, RF, PHY, BB would be turned on and kept for `Wi
 
  - Event `WIFI_EVENT_CONNECTIONLESS_MODULE_WAKE_INTERVAL_START`_ would be posted at the start of `Interval`. Since `Window` also starts at that moment, its recommended to TX in that event.
 
- - At connected state, the start of `Interval` would be aligned with TBTT.
+ - At connected state, the start of `Interval` would be aligned with TBTT. To improve the packet reception success rate in connectionless modules, the sender and receiver can be connected to the same AP, and packets can be transmitted within the event `WIFI_EVENT_CONNECTIONLESS_MODULE_WAKE_INTERVAL_START`_. This synchronization helps align the connectionless modules transmission window.
+
+ .. only:: esp32
+
+    On the ESP32, TBTT timing is affected by DFS(Dynamic Frequency Scaling). To synchronize the connectionless modules transmission window using TBTT on the ESP32, DFS must be disabled.
 
 **Window**
 
@@ -1993,6 +2027,94 @@ The table below shows the best throughput results gained in Espressif's lab and 
 
     When the throughput is tested by iperf example, the sdkconfig is :idf_file:`examples/wifi/iperf/sdkconfig.defaults.esp32c3`.
 
+.. only:: esp32c5
+
+    - 2.4 GHz band
+
+     .. list-table::
+        :header-rows: 1
+        :widths: 10 10 10 15 20
+
+        * - Type/Throughput
+          - Air In Lab
+          - Shield-box
+          - Test Tool
+          - IDF Version (commit ID)
+        * - Raw 802.11 Packet RX
+          - N/A
+          - **130 MBit/s**
+          - Internal tool
+          - NA
+        * - Raw 802.11 Packet TX
+          - N/A
+          - **130 MBit/s**
+          - Internal tool
+          - NA
+        * - UDP RX
+          - 30 MBit/s
+          - 68 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - UDP TX
+          - 30 MBit/s
+          - 63 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - TCP RX
+          - 20 MBit/s
+          - 59 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - TCP TX
+          - 20 MBit/s
+          - 49 MBit/s
+          - iperf example
+          - 7ff0a07d
+
+    - 5 GHz band
+
+     .. list-table::
+        :header-rows: 1
+        :widths: 10 10 10 15 20
+
+        * - Type/Throughput
+          - Air In Lab
+          - Shield-box
+          - Test Tool
+          - IDF Version (commit ID)
+        * - Raw 802.11 Packet RX
+          - N/A
+          - **130 MBit/s**
+          - Internal tool
+          - NA
+        * - Raw 802.11 Packet TX
+          - N/A
+          - **130 MBit/s**
+          - Internal tool
+          - NA
+        * - UDP RX
+          - 30 MBit/s
+          - 71 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - UDP TX
+          - 30 MBit/s
+          - 64 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - TCP RX
+          - 20 MBit/s
+          - 61 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - TCP TX
+          - 20 MBit/s
+          - 50 MBit/s
+          - iperf example
+          - 7ff0a07d
+
+    When the throughput is tested by iperf example, the sdkconfig is :idf_file:`examples/wifi/iperf/sdkconfig.defaults.esp32c5`.
+
 .. only:: esp32c6
 
      .. list-table::
@@ -2016,26 +2138,70 @@ The table below shows the best throughput results gained in Espressif's lab and 
           - NA
         * - UDP RX
           - 30 MBit/s
-          - 45 MBit/s
+          - 63 MBit/s
           - iperf example
-          - 420ebd20
+          - 7ff0a07d
         * - UDP TX
           - 30 MBit/s
-          - 40 MBit/s
+          - 51 MBit/s
           - iperf example
-          - 420ebd20
+          - 7ff0a07d
         * - TCP RX
           - 20 MBit/s
-          - 30 MBit/s
+          - 46 MBit/s
           - iperf example
-          - 420ebd20
+          - 7ff0a07d
         * - TCP TX
           - 20 MBit/s
-          - 31 MBit/s
+          - 43 MBit/s
           - iperf example
-          - 420ebd20
+          - 7ff0a07d
 
     When the throughput is tested by iperf example, the sdkconfig is :idf_file:`examples/wifi/iperf/sdkconfig.defaults.esp32c6`.
+
+.. only:: esp32c61
+
+     .. list-table::
+        :header-rows: 1
+        :widths: 10 10 10 15 20
+
+        * - Type/Throughput
+          - Air In Lab
+          - Shield-box
+          - Test Tool
+          - IDF Version (commit ID)
+        * - Raw 802.11 Packet RX
+          - N/A
+          - **130 MBit/s**
+          - Internal tool
+          - NA
+        * - Raw 802.11 Packet TX
+          - N/A
+          - **130 MBit/s**
+          - Internal tool
+          - NA
+        * - UDP RX
+          - 30 MBit/s
+          - 68 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - UDP TX
+          - 30 MBit/s
+          - 53 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - TCP RX
+          - 20 MBit/s
+          - 45 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - TCP TX
+          - 20 MBit/s
+          - 37 MBit/s
+          - iperf example
+          - 7ff0a07d
+
+    When the throughput is tested by iperf example, the sdkconfig is :idf_file:`examples/wifi/iperf/sdkconfig.defaults.esp32c61`.
 
 .. only:: esp32s3
 
@@ -2162,76 +2328,15 @@ The following packets will **NOT** be dumped to the application:
 
  - Other 802.11 error frames.
 
-For frames that the sniffer **can** dump, the application can additionally decide which specific type of packets can be filtered to the application by using :cpp:func:`esp_wifi_set_promiscuous_filter()` and :cpp:func:`esp_wifi_set_promiscuous_ctrl_filter()`. By default, it will filter all 802.11 data and management frames to the application.
+For frames that the sniffer **can** dump, the application can additionally decide which specific type of packets can be filtered to the application by using :cpp:func:`esp_wifi_set_promiscuous_filter()` and :cpp:func:`esp_wifi_set_promiscuous_ctrl_filter()`. By default, it will filter all 802.11 data and management frames to the application. If you want to filter the 802.11 control frames, the filter parameter in :cpp:func:`esp_wifi_set_promiscuous_filter()` should include `WIFI_PROMIS_FILTER_MASK_CTRL` type, and if you want to differentiate control frames further, then call :cpp:func:`esp_wifi_set_promiscuous_ctrl_filter()`.
 
 The Wi-Fi sniffer mode can be enabled in the Wi-Fi mode of :cpp:enumerator:`WIFI_MODE_NULL`, :cpp:enumerator:`WIFI_MODE_STA`, :cpp:enumerator:`WIFI_MODE_AP`, or :cpp:enumerator:`WIFI_MODE_APSTA`. In other words, the sniffer mode is active when the station is connected to the AP, or when the AP has a Wi-Fi connection. Please note that the sniffer has a **great impact** on the throughput of the station or AP Wi-Fi connection. Generally, the sniffer should be enabled **only if** the station/AP Wi-Fi connection does not experience heavy traffic.
 
 Another noteworthy issue about the sniffer is the callback :cpp:type:`wifi_promiscuous_cb_t`. The callback will be called directly in the Wi-Fi driver task, so if the application has a lot of work to do for each filtered packet, the recommendation is to post an event to the application task in the callback and defer the real work to the application task.
 
 Wi-Fi Multiple Antennas
---------------------------
-The Wi-Fi multiple antennas selecting can be depicted as following picture::
-
-                    __________
-                   |Enabled   |
-                ___|Antenna 0 |\\                                              _________
-                   |__________| \\        GPIO[0] <----> antenna_select[0] ---|         | --- antenna 0
-    RX/TX ___                    \\____\  GPIO[1] <----> antenna_select[1] ---| Antenna | --- antenna 1
-             \      __________   //    /  GPIO[2] <----> antenna_select[2] ---| Switch  | ...  ...
-              \ ___|Enabled   | //        GPIO[3] <----> antenna_select[3] ---|_________| --- antenna 15
-               \   |Antenna 1 |//
-                   |__________|
-
-
-{IDF_TARGET_NAME} supports up to sixteen antennas through external antenna switch. The antenna switch can be controlled by up to four address pins - antenna_select[0:3]. Different input value of antenna_select[0:3] means selecting different antenna. For example, the value '0b1011' means the antenna 11 is selected. The default value of antenna_select[3:0] is '0b0000', which means the antenna 0 is selected by default.
-
-Up to four GPIOs are connected to the four active high antenna_select pins. {IDF_TARGET_NAME} can select the antenna by control the GPIO[0:3]. The API :cpp:func:`esp_wifi_set_ant_gpio()` is used to configure which GPIOs are connected to antenna_selects. If GPIO[x] is connected to antenna_select[x], then gpio_config->gpio_cfg[x].gpio_select should be set to 1 and gpio_config->gpio_cfg[x].gpio_num should be provided.
-
-For the specific implementation of the antenna switch, there may be illegal values in `antenna_select[0:3]`. It means that {IDF_TARGET_NAME} may support less than sixteen antennas through the switch. For example, ESP32-WROOM-DA which uses RTC6603SP as the antenna switch, supports two antennas. Two GPIOs are connected to two active high antenna selection inputs. The value '0b01' means the antenna 0 is selected, the value '0b10' means the antenna 1 is selected. Values '0b00' and '0b11' are illegal.
-
-Although up to sixteen antennas are supported, only one or two antennas can be simultaneously enabled for RX/TX. The API :cpp:func:`esp_wifi_set_ant()` is used to configure which antennas are enabled.
-
-The enabled antennas selecting algorithm is also configured by :cpp:func:`esp_wifi_set_ant()`. The RX/TX antenna mode can be :cpp:enumerator:`WIFI_ANT_MODE_ANT0`, :cpp:enumerator:`WIFI_ANT_MODE_ANT1`, or :cpp:enumerator:`WIFI_ANT_MODE_AUTO`. If the antenna mode is :cpp:enumerator:`WIFI_ANT_MODE_ANT0`, the enabled antenna 0 is selected for RX/TX data. If the antenna mode is :cpp:enumerator:`WIFI_ANT_MODE_ANT1`, the enabled antenna 1 is selected for RX/TX data. Otherwise, Wi-Fi automatically selects the enabled antenna that has better signal.
-
-If the RX antenna mode is :cpp:enumerator:`WIFI_ANT_MODE_AUTO`, the default antenna mode also needs to be set, because the RX antenna switching only happens when some conditions are met. For example, the RX antenna starts to switch if the RSSI is lower than -65 dBm or another antenna has better signal. RX uses the default antenna if the conditions are not met. If the default antenna mode is :cpp:enumerator:`WIFI_ANT_MODE_ANT1`, the enabled antenna 1 is used as the default RX antenna, otherwise the enabled antenna 0 is used.
-
-Some limitations need to be considered:
-
- - The TX antenna can be set to :cpp:enumerator:`WIFI_ANT_MODE_AUTO` only if the RX antenna mode is :cpp:enumerator:`WIFI_ANT_MODE_AUTO`, because TX antenna selecting algorithm is based on RX antenna in :cpp:enumerator:`WIFI_ANT_MODE_AUTO` type.
- - When the TX antenna mode or RX antenna mode is configured to :cpp:enumerator:`WIFI_ANT_MODE_AUTO` the switching mode will easily trigger the switching phase, as long as there is deterioration of the RF signal. So in situations where the RF signal is not stable, the antenna switching will occur frequently, resulting in an RF performance that may not meet expectations.
- - Currently, Bluetooth® does not support the multiple antennas feature, so please do not use multiple antennas related APIs.
-
-Following is the recommended scenarios to use the multiple antennas:
-
- - The applications can always choose to select a specified antenna or implement their own antenna selecting algorithm, e.g., selecting the antenna mode based on the information collected by the application. Refer to ESP-IDF example :idf_file:`examples/wifi/antenna/README.md` for the antenna selecting algorithm design.
- - Both RX/TX antenna modes are configured to WIFI_ANT_MODE_ANT0 or WIFI_ANT_MODE_ANT1.
-
-
-Wi-Fi Multiple Antennas Configuration
-+++++++++++++++++++++++++++++++++++++
-
-Generally, following steps can be taken to configure the multiple antennas:
-
-- Configure which GPIOs are connected to the antenna_selects. For example, if four antennas are supported and GPIO20/GPIO21 are connected to antenna_select[0]/antenna_select[1], the configurations look like:
-
-.. code-block:: c
-
-    wifi_ant_gpio_config_t ant_gpio_config = {
-        .gpio_cfg[0] = { .gpio_select = 1, .gpio_num = 20 },
-        .gpio_cfg[1] = { .gpio_select = 1, .gpio_num = 21 }
-    };
-
-- Configure which antennas are enabled and how RX/TX use the enabled antennas. For example, if antenna1 and antenna3 are enabled, the RX needs to select the better antenna automatically and uses antenna1 as its default antenna, the TX always selects the antenna3. The configuration looks like:
-
-.. code-block:: c
-
-    wifi_ant_config_t config = {
-        .rx_ant_mode = WIFI_ANT_MODE_AUTO,
-        .rx_ant_default = WIFI_ANT_ANT0,
-        .tx_ant_mode = WIFI_ANT_MODE_ANT1,
-        .enabled_ant0 = 1,
-        .enabled_ant1 = 3
-    };
+---------------------------
+Please refer to the :doc:`PHY <../api-guides/phy>`
 
 .. only:: SOC_WIFI_CSI_SUPPORT
 
@@ -2310,7 +2415,7 @@ Wi-Fi HT20/40
 
     Similarly, in AP mode, the actual bandwidth is negotiated between AP and the stations that connect to the AP. It is HT40 if the AP and one of the stations support HT40, otherwise it is HT20.
 
-    In station/AP coexist mode, the station/AP can configure HT20/40 seperately. If both station and AP are negotiated to HT40, the HT40 channel should be the channel of station because the station always has higher priority than AP in {IDF_TARGET_NAME}. For example, the configured bandwidth of AP is HT40, the configured primary channel is 6, and the configured secondary channel is 10. The station is connected to an router whose primary channel is 6 and secondary channel is 2, then the actual channel of AP is changed to primary 6 and secondary 2 automatically.
+    In station/AP coexist mode, the station/AP can configure HT20/40 separately. If both station and AP are negotiated to HT40, the HT40 channel should be the channel of station because the station always has higher priority than AP in {IDF_TARGET_NAME}. For example, the configured bandwidth of AP is HT40, the configured primary channel is 6, and the configured secondary channel is 10. The station is connected to an router whose primary channel is 6 and secondary channel is 2, then the actual channel of AP is changed to primary 6 and secondary 2 automatically.
 
     Theoretically, the HT40 can gain better throughput because the maximum raw physicial (PHY) data rate for HT40 is 150 Mbps while it is 72 Mbps for HT20. However, if the device is used in some special environment, e.g., there are too many other Wi-Fi devices around the {IDF_TARGET_NAME} device, the performance of HT40 may be degraded. So if the applications need to support same or similar scenarios, it is recommended that the bandwidth is always configured to HT20.
 
@@ -2618,29 +2723,29 @@ The parameters not mentioned in the following table should be set to the default
           - 12
           - 8
         * - WIFI_IRAM_OPT
-          - 15
-          - 15
-          - 15
-          - 15
-          - 15
-          - 15
-          - 15
+          - ENABLE
+          - ENABLE
+          - ENABLE
+          - ENABLE
+          - ENABLE
+          - ENABLE
+          - ENABLE
         * - WIFI_RX_IRAM_OPT
-          - 16
-          - 16
-          - 16
-          - 16
-          - 16
-          - 16
-          - 16
+          - ENABLE
+          - ENABLE
+          - ENABLE
+          - ENABLE
+          - ENABLE
+          - ENABLE
+          - ENABLE
         * - LWIP_IRAM_OPTIMIZATION
-          - 13
-          - 13
-          - 13
-          - 13
-          - 13
-          - 13
-          - 13
+          - ENABLE
+          - ENABLE
+          - ENABLE
+          - ENABLE
+          - ENABLE
+          - ENABLE
+          - ENABLE
         * - TCP TX throughput (Mbit/s)
           - 74.6
           - 50.8
@@ -2730,23 +2835,23 @@ The parameters not mentioned in the following table should be set to the default
           - 8
           - 6
         * - WIFI_IRAM_OPT
-          - 15
-          - 15
-          - 15
-          - 15
-          - 0
+          - ENABLE
+          - ENABLE
+          - ENABLE
+          - ENABLE
+          - DISABLE
         * - WIFI_RX_IRAM_OPT
-          - 16
-          - 16
-          - 16
-          - 0
-          - 0
+          - ENABLE
+          - ENABLE
+          - ENABLE
+          - DISABLE
+          - DISABLE
         * - LWIP_IRAM_OPTIMIZATION
-          - 13
-          - 13
-          - 0
-          - 0
-          - 0
+          - ENABLE
+          - ENABLE
+          - DISABLE
+          - DISABLE
+          - DISABLE
         * - INSTRUCTION_CACHE
           - 16
           - 16
@@ -2823,9 +2928,9 @@ The parameters not mentioned in the following table should be set to the default
           - 16
           - 6
         * - LWIP_IRAM_OPTIMIZATION
-          - 13
-          - 13
-          - 0
+          - ENABLE
+          - ENABLE
+          - DISABLE
         * - TCP TX throughput (Mbit/s)
           - 38.1
           - 27.2
@@ -2882,9 +2987,9 @@ The parameters not mentioned in the following table should be set to the default
           - 16
           - 6
         * - LWIP_IRAM_OPTIMIZATION
-          - 13
-          - 13
-          - 0
+          - ENABLE
+          - ENABLE
+          - DISABLE
         * - TCP TX throughput (Mbit/s)
           - 30.5
           - 25.9
@@ -2941,9 +3046,9 @@ The parameters not mentioned in the following table should be set to the default
           - 14
           - 6
         * - LWIP_IRAM_OPTIMIZATION
-          - 13
-          - 13
-          - 0
+          - ENABLE
+          - ENABLE
+          - DISABLE
         * - TCP TX throughput (Mbit/s)
           - 21.6
           - 21.4
@@ -3000,17 +3105,17 @@ The parameters not mentioned in the following table should be set to the default
           - 32
           - 6
         * - WIFI_IRAM_OPT
-          - 15
-          - 15
-          - 15
+          - ENABLE
+          - ENABLE
+          - ENABLE
         * - WIFI_RX_IRAM_OPT
-          - 16
-          - 16
-          - 16
+          - ENABLE
+          - ENABLE
+          - ENABLE
         * - LWIP_IRAM_OPTIMIZATION
-          - 13
-          - 13
-          - 0
+          - ENABLE
+          - ENABLE
+          - DISABLE
         * - INSTRUCTION_CACHE
           - 32
           - 32
@@ -3176,20 +3281,20 @@ The parameters not mentioned in the following table should be set to the default
                - 65
                - 65
              * - WIFI_IRAM_OPT
-               - 15
-               - 15
-               - 15
-               - 0
+               - ENABLE
+               - ENABLE
+               - ENABLE
+               - DISABLE
              * - WIFI_RX_IRAM_OPT
-               - 16
-               - 16
-               - 0
-               - 0
+               - ENABLE
+               - ENABLE
+               - DISABLE
+               - DISABLE
              * - LWIP_IRAM_OPTIMIZATION
-               - 13
-               - 0
-               - 0
-               - 0
+               - ENABLE
+               - DISABLE
+               - DISABLE
+               - DISABLE
              * - TCP TX throughput (Mbit/s)
                - 37.5
                - 31.7
@@ -3258,20 +3363,20 @@ The parameters not mentioned in the following table should be set to the default
                - 32
                - 32
              * - WIFI_IRAM_OPT
-               - 15
-               - 15
-               - 15
-               - 0
+               - ENABLE
+               - ENABLE
+               - ENABLE
+               - DISABLE
              * - WIFI_RX_IRAM_OPT
-               - 16
-               - 16
-               - 0
-               - 0
+               - ENABLE
+               - ENABLE
+               - DISABLE
+               - DISABLE
              * - LWIP_IRAM_OPTIMIZATION
-               - 13
-               - 0
-               - 0
-               - 0
+               - ENABLE
+               - DISABLE
+               - DISABLE
+               - DISABLE
              * - INSTRUCTION_CACHE
                - 16
                - 16
@@ -3365,20 +3470,20 @@ The parameters not mentioned in the following table should be set to the default
                - 32
                - 32
              * - WIFI_IRAM_OPT
-               - 15
-               - 15
-               - 15
-               - 0
+               - ENABLE
+               - ENABLE
+               - ENABLE
+               - DISABLE
              * - WIFI_RX_IRAM_OPT
-               - 16
-               - 16
-               - 0
-               - 0
+               - ENABLE
+               - ENABLE
+               - DISABLE
+               - DISABLE
              * - LWIP_IRAM_OPTIMIZATION
-               - 13
-               - 0
-               - 0
-               - 0
+               - ENABLE
+               - DISABLE
+               - DISABLE
+               - DISABLE
              * - LWIP_UDP_RECVMBOX_SIZE
                - 16
                - 16
@@ -3482,20 +3587,20 @@ The parameters not mentioned in the following table should be set to the default
                - 32
                - 32
              * - WIFI_IRAM_OPT
-               - 15
-               - 15
-               - 15
-               - 0
+               - ENABLE
+               - ENABLE
+               - ENABLE
+               - DISABLE
              * - WIFI_RX_IRAM_OPT
-               - 16
-               - 16
-               - 0
-               - 0
+               - ENABLE
+               - ENABLE
+               - DISABLE
+               - DISABLE
              * - LWIP_IRAM_OPTIMIZATION
-               - 13
-               - 0
-               - 0
-               - 0
+               - ENABLE
+               - DISABLE
+               - DISABLE
+               - DISABLE
              * - LWIP_UDP_RECVMBOX_SIZE
                - 16
                - 16

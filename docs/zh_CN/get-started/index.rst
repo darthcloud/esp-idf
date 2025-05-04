@@ -76,7 +76,24 @@
     * 多种外设
     * 内置安全硬件
 
-{IDF_TARGET_NAME} 采用 40 nm 工艺制成，具有最佳的功耗性能、射频性能、稳定性、通用性和可靠性，适用于各种应用场景和不同功耗需求。
+.. only:: esp32p4
+
+    * 搭载 RISC-V 32 位双核处理器的高性能 MCU
+    * 强大的图像与语音处理能力
+    * 支持单精度 FPU 和 AI 扩展
+    * 外设丰富包括 MIPI、USB、SDIO、以太网等
+    * 内置安全硬件
+
+
+.. only:: esp32p4
+
+    {IDF_TARGET_NAME} 采用 40 nm 工艺制成，具有最佳的功耗性能、安全性和可靠性，适用于各种应用场景和不同功耗需求。
+
+
+.. only:: not esp32p4
+
+    {IDF_TARGET_NAME} 采用 40 nm 工艺制成，具有最佳的功耗性能、射频性能、安全性和可靠性，适用于各种应用场景和不同功耗需求。
+
 
 乐鑫为用户提供完整的软、硬件资源，进行 {IDF_TARGET_NAME} 硬件设备的开发。其中，乐鑫的软件开发环境 ESP-IDF 旨在协助用户快速开发物联网 (IoT) 应用，可满足用户对 Wi-Fi、蓝牙、低功耗等方面的要求。
 
@@ -99,32 +116,31 @@
     .. toctree::
         :maxdepth: 1
 
-        ESP32-DevKitC <../hw-reference/esp32/get-started-devkitc>
-        ESP-WROVER-KIT <../hw-reference/esp32/get-started-wrover-kit>
-        ESP32-PICO-KIT <../hw-reference/esp32/get-started-pico-kit>
-        ESP32-Ethernet-Kit <../hw-reference/esp32/get-started-ethernet-kit>
-        ESP32-DevKit-S(-R) <../hw-reference/esp32/user-guide-devkits-r-v1.1>
-        ESP32-PICO-KIT-1 <../hw-reference/esp32/get-started-pico-kit-1>
-        ESP32-PICO-DevKitM-2 <../hw-reference/esp32/get-started-pico-devkitm-2>
-        ESP32-DevKitM-1 <../hw-reference/esp32/user-guide-devkitm-1>
+        ESP32-DevKitC <https://docs.espressif.com/projects/esp-dev-kits/zh_CN/latest/esp32/esp32-devkitc/index.html>
+        ESP32-DevKitM-1 <https://docs.espressif.com/projects/esp-dev-kits/zh_CN/latest/esp32/esp32-devkitm-1/index.html>
+        ESP-WROVER-KIT <https://docs.espressif.com/projects/esp-dev-kits/zh_CN/latest/esp32/esp-wrover-kit/index.html>
+        ESP32-PICO-KIT <https://docs.espressif.com/projects/esp-dev-kits/zh_CN/latest/esp32/esp32-pico-kit/index.html>
+        ESP32-Ethernet-Kit <https://docs.espressif.com/projects/esp-dev-kits/zh_CN/latest/esp32/esp32-ethernet-kit/index.html>
+        ESP32-PICO-KIT-1 <https://docs.espressif.com/projects/esp-dev-kits/zh_CN/latest/esp32/esp32-pico-kit-1/index.html>
+        ESP32-PICO-DevKitM-2 <https://docs.espressif.com/projects/esp-dev-kits/zh_CN/latest/esp32/esp32-pico-devkitm-2/index.html>
 
 .. only:: esp32s2
 
     .. toctree::
         :maxdepth: 1
 
-        ESP32-S2-Saola-1 <../hw-reference/esp32s2/user-guide-saola-1-v1.2>
-        ESP32-S2-DevKitM-1 <../hw-reference/esp32s2/user-guide-devkitm-1-v1>
-        ESP32-S2-DevKitC-1 <../hw-reference/esp32s2/user-guide-s2-devkitc-1>
-        ESP32-S2-Kaluga-Kit <../hw-reference/esp32s2/user-guide-esp32-s2-kaluga-1-kit>
+        ESP32-S2-Saola-1 <https://docs.espressif.com/projects/esp-dev-kits/zh_CN/latest/esp32s2/esp32-s2-saola-1/index.html>
+        ESP32-S2-DevKitM-1 <https://docs.espressif.com/projects/esp-dev-kits/zh_CN/latest/esp32s2/esp32-s2-devkitm-1/index.html>
+        ESP32-S2-DevKitC-1 <https://docs.espressif.com/projects/esp-dev-kits/zh_CN/latest/esp32s2/esp32-s2-devkitc-1/index.html>
+        ESP32-S2-Kaluga-Kit <https://docs.espressif.com/projects/esp-dev-kits/zh_CN/latest/esp32s2/esp32-s2-kaluga-1/index.html>
 
 .. only:: esp32c3
 
     .. toctree::
         :maxdepth: 1
 
-        ESP32-C3-DevKitM-1 <../hw-reference/esp32c3/user-guide-devkitm-1>
-        ESP32-C3-DevKitC-02 <../hw-reference/esp32c3/user-guide-devkitc-02>
+        ESP32-C3-DevKitC-02 <https://docs.espressif.com/projects/espressif-esp-dev-kits/zh_CN/latest/esp32c3/esp32-c3-devkitc-02/index.html>
+        ESP32-C3-DevKitM-1 <https://docs.espressif.com/projects/espressif-esp-dev-kits/zh_CN/latest/esp32c3/esp32-c3-devkitm-1/index.html>
 
 
 .. only:: esp32s3
@@ -132,8 +148,8 @@
     .. toctree::
         :maxdepth: 1
 
-        ESP32-S3-DevKitC-1 <../hw-reference/esp32s3/user-guide-devkitc-1>
-        ESP32-S3-DevKitM-1 <../hw-reference/esp32s3/user-guide-devkitm-1>
+        ESP32-S3-DevKitC-1 <https://docs.espressif.com/projects/esp-dev-kits/zh_CN/latest/esp32s3/esp32-s3-devkitc-1/index.html>
+        ESP32-S3-DevKitM-1 <https://docs.espressif.com/projects/esp-dev-kits/zh_CN/latest/esp32s3/esp32-s3-devkitm-1/index.html>
 
 .. only:: esp32c2
 
@@ -149,6 +165,10 @@
 
         ESP32-C6-DevKitC-1 <https://docs.espressif.com/projects/espressif-esp-dev-kits/zh_CN/latest/esp32c6/esp32-c6-devkitc-1/index.html>
         ESP32-C6-DevKitM-1 <https://docs.espressif.com/projects/espressif-esp-dev-kits/zh_CN/latest/esp32c6/esp32-c6-devkitm-1/index.html>
+
+.. only:: esp32p4
+
+    即将发布
 
 .. _get-started-get-prerequisites:
 
@@ -180,7 +200,7 @@ IDE
 .. note:: 建议通过自己喜欢的集成开发环境 (IDE) 安装 ESP-IDF。
 
 * `Eclipse Plugin <https://github.com/espressif/idf-eclipse-plugin/blob/master/README.md>`_
-* `VSCode Extension <https://github.com/espressif/vscode-esp-idf-extension/blob/master/docs/tutorial/install.md>`_
+* `VSCode Extension <https://github.com/espressif/vscode-esp-idf-extension/blob/master/README_CN.md>`_
 
 手动安装
 ~~~~~~~~~~~~~~~~~~~

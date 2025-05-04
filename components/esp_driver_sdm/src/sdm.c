@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -25,9 +25,11 @@
 #include "hal/gpio_hal.h"
 #include "hal/sdm_hal.h"
 #include "hal/sdm_ll.h"
+#include "hal/hal_utils.h"
 #include "soc/sdm_periph.h"
 #include "esp_private/esp_clk.h"
 #include "esp_private/io_mux.h"
+#include "esp_private/gpio.h"
 
 #if CONFIG_SDM_CTRL_FUNC_IN_IRAM
 #define SDM_MEM_ALLOC_CAPS      (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
@@ -228,21 +230,30 @@ esp_err_t sdm_new_channel(const sdm_config_t *config, sdm_channel_handle_t *ret_
     // SDM clock comes from IO MUX, but IO MUX clock might be shared with other submodules as well
     ESP_GOTO_ON_ERROR(io_mux_set_clock_source((soc_module_clk_t)(group->clk_src)), err, TAG, "set IO MUX clock source failed");
 
-    // GPIO configuration
-    gpio_config_t gpio_conf = {
-        .intr_type = GPIO_INTR_DISABLE,
-        // also enable the input path is `io_loop_back` is on, this is useful for debug
-        .mode = GPIO_MODE_OUTPUT | (config->flags.io_loop_back ? GPIO_MODE_INPUT : 0),
-        .pull_down_en = false,
-        .pull_up_en = true,
-        .pin_bit_mask = 1ULL << config->gpio_num,
-    };
-    ESP_GOTO_ON_ERROR(gpio_config(&gpio_conf), err, TAG, "config GPIO failed");
+    gpio_func_sel(config->gpio_num, PIN_FUNC_GPIO);
+    // deprecated, to be removed in in esp-idf v6.0
+    if (config->flags.io_loop_back) {
+        gpio_input_enable(config->gpio_num);
+    }
+    // connect the signal to the GPIO by matrix, it will also enable the output path properly
     esp_rom_gpio_connect_out_signal(config->gpio_num, sigma_delta_periph_signals.channels[chan_id].sd_sig, config->flags.invert_out, false);
     chan->gpio_num = config->gpio_num;
 
     // set prescale based on sample rate
-    uint32_t prescale = src_clk_hz / config->sample_rate_hz;
+    uint32_t prescale = 0;
+    hal_utils_clk_info_t clk_info = {
+        .src_freq_hz = src_clk_hz,
+        .exp_freq_hz = config->sample_rate_hz,
+        .max_integ = SDM_LL_PRESCALE_MAX + 1,
+        .min_integ = 1,
+        .round_opt = HAL_DIV_ROUND,
+    };
+    uint32_t actual_freq = hal_utils_calc_clk_div_integer(&clk_info, &prescale);
+    ESP_GOTO_ON_FALSE(actual_freq, ESP_ERR_INVALID_ARG, err, TAG,
+                      "sample rate out of range [%"PRIu32", %"PRIu32"] Hz", src_clk_hz / SDM_LL_PRESCALE_MAX, src_clk_hz);
+    if (actual_freq != config->sample_rate_hz) {
+        ESP_LOGW(TAG, "precision loss, expected sample rate %"PRIu32" Hz runs at %"PRIu32" Hz", config->sample_rate_hz, actual_freq);
+    }
     sdm_ll_set_prescale(group->hal.dev, chan_id, prescale);
     chan->sample_rate_hz = src_clk_hz / prescale;
     // preset the duty cycle to zero
@@ -269,6 +280,7 @@ esp_err_t sdm_del_channel(sdm_channel_handle_t chan)
     sdm_group_t *group = chan->group;
     int group_id = group->group_id;
     int chan_id = chan->chan_id;
+    gpio_output_disable(chan->gpio_num);
     ESP_LOGD(TAG, "del channel (%d,%d)", group_id, chan_id);
     // recycle memory resource
     ESP_RETURN_ON_ERROR(sdm_destroy(chan), TAG, "destroy channel failed");

@@ -1,10 +1,11 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Note that most of the register operations in this layer are non-atomic operations.
+// Attention: Timer Group has 3 independent functions: General Purpose Timer, Watchdog Timer and Clock calibration.
+//            This Low Level driver only serve the General Purpose Timer function.
 
 #pragma once
 
@@ -86,7 +87,7 @@ extern "C" {
  * @param group_id Group ID
  * @param enable true to enable, false to disable
  */
-static inline void timer_ll_enable_bus_clock(int group_id, bool enable)
+static inline void _timer_ll_enable_bus_clock(int group_id, bool enable)
 {
     if (group_id == 0) {
         HP_SYS_CLKRST.soc_clk_ctrl2.reg_timergrp0_apb_clk_en = enable;
@@ -97,7 +98,7 @@ static inline void timer_ll_enable_bus_clock(int group_id, bool enable)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_RC_ATOMIC_ENV variable in advance
-#define timer_ll_enable_bus_clock(...) (void)__DECLARE_RCC_RC_ATOMIC_ENV; timer_ll_enable_bus_clock(__VA_ARGS__)
+#define timer_ll_enable_bus_clock(...) (void)__DECLARE_RCC_RC_ATOMIC_ENV; _timer_ll_enable_bus_clock(__VA_ARGS__)
 
 /**
  * @brief Reset the timer group module
@@ -108,7 +109,7 @@ static inline void timer_ll_enable_bus_clock(int group_id, bool enable)
  *
  * @param group_id Group ID
  */
-static inline void timer_ll_reset_register(int group_id)
+static inline void _timer_ll_reset_register(int group_id)
 {
     if (group_id == 0) {
         HP_SYS_CLKRST.hp_rst_en1.reg_rst_en_timergrp0 = 1;
@@ -123,16 +124,16 @@ static inline void timer_ll_reset_register(int group_id)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_RC_ATOMIC_ENV variable in advance
-#define timer_ll_reset_register(...) (void)__DECLARE_RCC_RC_ATOMIC_ENV; timer_ll_reset_register(__VA_ARGS__)
+#define timer_ll_reset_register(...) (void)__DECLARE_RCC_RC_ATOMIC_ENV; _timer_ll_reset_register(__VA_ARGS__)
 
 /**
  * @brief Set clock source for timer
  *
- * @param hw Timer Group register base address
+ * @param group_id Group ID
  * @param timer_num Timer number in the group
  * @param clk_src Clock source
  */
-static inline void timer_ll_set_clock_source(timg_dev_t *hw, uint32_t timer_num, gptimer_clock_source_t clk_src)
+static inline void timer_ll_set_clock_source(int group_id, uint32_t timer_num, gptimer_clock_source_t clk_src)
 {
     uint8_t clk_id = 0;
     switch (clk_src) {
@@ -149,7 +150,7 @@ static inline void timer_ll_set_clock_source(timg_dev_t *hw, uint32_t timer_num,
         HAL_ASSERT(false);
         break;
     }
-    if (hw == &TIMERG0) {
+    if (group_id == 0) {
         if (timer_num == 0) {
             HP_SYS_CLKRST.peri_clk_ctrl20.reg_timergrp0_t0_src_sel = clk_id;
         } else {
@@ -171,13 +172,13 @@ static inline void timer_ll_set_clock_source(timg_dev_t *hw, uint32_t timer_num,
 /**
  * @brief Enable Timer Group (GPTimer) module clock
  *
- * @param hw Timer Group register base address
+ * @param group_id Group ID
  * @param timer_num Timer index in the group
  * @param en true to enable, false to disable
  */
-static inline void timer_ll_enable_clock(timg_dev_t *hw, uint32_t timer_num, bool en)
+static inline void _timer_ll_enable_clock(int group_id, uint32_t timer_num, bool en)
 {
-    if (hw == &TIMERG0) {
+    if (group_id == 0) {
         if (timer_num == 0) {
             HP_SYS_CLKRST.peri_clk_ctrl20.reg_timergrp0_t0_clk_en = en;
         } else {
@@ -194,7 +195,7 @@ static inline void timer_ll_enable_clock(timg_dev_t *hw, uint32_t timer_num, boo
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define timer_ll_enable_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; timer_ll_enable_clock(__VA_ARGS__)
+#define timer_ll_enable_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; _timer_ll_enable_clock(__VA_ARGS__)
 
 /**
  * @brief Enable alarm event
@@ -254,7 +255,7 @@ static inline void timer_ll_set_count_direction(timg_dev_t *hw, uint32_t timer_n
 }
 
 /**
- * @brief Enable timer, start couting
+ * @brief Enable timer, start counting
  *
  * @param hw Timer Group register base address
  * @param timer_num Timer number in the group

@@ -27,6 +27,10 @@ Wi-Fi 驱动程序
     - 支持多个天线
     - 支持获取信道状态信息
 
+    .. only:: SOC_WIFI_NAN_SUPPORT
+
+     - Wi-Fi Aware (NAN)
+
 .. only:: esp32c6
 
     - 支持 4 个虚拟接口，即 STA、AP、Sniffer 和 reserved。
@@ -69,6 +73,34 @@ Wi-Fi 驱动程序
 一般来说，要编写自己的 Wi-Fi 应用程序，最高效的方式是先选择一个相似的应用程序示例，然后将其中可用的部分移植到自己的项目中。如果你希望编写一个强健的 Wi-Fi 应用程序，强烈建议在开始之前先阅读本文。**非强制要求，请依个人情况而定。**
 
 本文将补充说明 Wi-Fi API 和 Wi-Fi 示例的相关信息，重点描述使用 Wi-Fi API 的原则、当前 Wi-Fi API 实现的限制以及使用 Wi-Fi 时的常见错误。同时，本文还介绍了 Wi-Fi 驱动程序的一些设计细节。建议选择一个示例 :example:`example <wifi>` 进行参考。
+
+- :example:`wifi/getting_started/station` 演示如何使用 station 功能连接到 AP。
+
+- :example:`wifi/getting_started/softAP` 演示如何使用 SoftAP 功能将 {IDF_TARGET_NAME} 配置为 AP。
+
+- :example:`wifi/scan` 演示如何扫描可用的 AP，配置扫描设置，并显示扫描结果。
+
+- :example:`wifi/fast_scan` 演示如何执行快速和全通道扫描，查找附近的 AP，设置信号强度的阈值和认证模式，并根据信号强度和认证模式连接到最合适的 AP。
+
+- :example:`wifi/wps` 演示如何使用 WPS 入网功能，简化连接 Wi-Fi 路由器的过程，支持 PIN 或 PBC 模式。
+
+- :example:`wifi/wps_softap_registrar` 演示如何在 SoftAP 模式下使用 WPS 注册器功能，从而简化从 station 连接到 Wi-Fi SoftAP 的过程。
+
+- :example:`wifi/smart_config` 演示如何使用 smartconfig 功能通过 ESPTOUCH 应用连接到目标 AP。
+
+- :example:`wifi/power_save` 演示如何使用 station 模式的省电模式。
+
+- :example:`wifi/softap_sta` 演示如何配置 {IDF_TARGET_NAME} 同时用作 AP 和 station，从而可将其用作 Wi-Fi NAT 路由器。
+
+- :example:`wifi/iperf` 演示如何实现 iPerf 性能测量工具所使用的协议，允许在两个芯片之间或在单个芯片和运行 iPerf 工具的计算机之间进行性能测量，并提供测试 station/SoftAP TCP/UDP RX/TX 吞吐量的具体说明。
+
+- :example:`wifi/roaming/roaming_app` 演示如何使用 Wi-Fi Roaming App 功能，在兼容的 AP 之间高效漫游。
+
+- :example:`wifi/roaming/roaming_11kvr` 演示如何使用 11k 和 11v API 实现漫游功能。
+
+.. only:: SOC_WIFI_HE_SUPPORT
+
+    - :example:`wifi/itwt` 演示如何使用 iTWT 功能，该功能仅在 station 模式下工作，并在不同的省电模式下提供设置、拆卸和挂起的命令，还展示了启用和禁用 iTWT 时的电流消耗差异。
 
 设置 Wi-Fi 编译时选项
 ++++++++++++++++++++++++++++++++++++
@@ -243,7 +275,7 @@ WIFI_EVENT_STA_DISCONNECTED
 - 5 秒后，因为在应用程序的事件回调函数中调用了 :cpp:func:`esp_wifi_connect()`，Wi-Fi 连接恢复。**同时，station 连接至同一个 AP 并获得与之前相同的 IPV4 地址。**
 - 60 秒后，当应用程序发送具有保持活动状态的套接字的数据时，套接字将返回错误，应用程序将关闭套接字并在必要时重新创建。
 
-在上述场景中，理想状态下应用程序套接字和网络层将不会受到影响，因为在此过程中 Wi-Fi 连接只是短暂地断开然后快速恢复。应用程序可通过 LwIP menuconfig 启动“IP 改变时保持 TCP 连接”的功能。
+在上述场景中，理想状态下应用程序套接字和网络层将不会受到影响，因为在此过程中 Wi-Fi 连接只是短暂地断开然后快速恢复。
 
 IP_EVENT_STA_GOT_IP
 ++++++++++++++++++++++++++++++++++++
@@ -807,7 +839,7 @@ Wi-Fi 驱动程序内部扫描阶段
 +++++++++++++++++++++
 
  - s3.1：发送关联请求并使能关联计时器。
- - s3.2：如果在关联计时器超时之前未接收到关联响应，将产生 `WIFI_EVENT_STA_DISCONNECTED`_ 事件，且原因代码为 ``WIFI_REASON_ASSOC_EXPIRE``。请参阅 `Wi-Fi 原因代码`_。
+ - s3.2：如果在关联计时器超时之前未接收到关联响应，将产生 `WIFI_EVENT_STA_DISCONNECTED`_ 事件，且原因代码为 ``WIFI_REASON_DISASSOC_DUE_TO_INACTIVITY``。请参阅 `Wi-Fi 原因代码`_。
  - s3.3：接收到关联响应，且关联计时器终止。
  - s3.4：AP 在响应中拒绝关联且产生 `WIFI_EVENT_STA_DISCONNECTED`_ 事件，原因代码将在关联响应中指定。请参阅 `Wi-Fi 原因代码`_。
 
@@ -864,7 +896,7 @@ Wi-Fi 原因代码
        对于 ESP station，出现以下情况时报告该代码：
 
        - 从 AP 接收到该代码。
-   * - ASSOC_EXPIRE
+   * - DISASSOC_DUE_TO_INACTIVITY
      - 4
      - 4
      - 因为 AP 不活跃，association 取消。
@@ -890,7 +922,7 @@ Wi-Fi 原因代码
        对于 ESP AP，出现以下情况时将报告该代码：
 
        - 与 AP 相关联的 station 数量已到达 AP 可支持的最大值。
-   * - NOT_AUTHED
+   * - CLASS2_FRAME_FROM_NONAUTH_STA
      - 6
      - 6
      - 从一个未认证 station 接收到 class-2 frame。
@@ -902,7 +934,7 @@ Wi-Fi 原因代码
        对于 ESP AP，出现以下情况时将报告该代码：
 
        - AP 从一个未认证 station 接收到数据包。
-   * - NOT_ASSOCED
+   * - CLASS3_FRAME_FROM_NONASSOC_STA
      - 7
      - 7
      - 从一个未关联 station 接收到的 class-3 frame。
@@ -1167,7 +1199,7 @@ Wi-Fi 原因代码
    * - ASSOC_FAIL
      - 203
      - 保留
-     - 乐鑫特有的 Wi-Fi 原因代码： association 失败，但并非由 ASSOC_EXPIRE 或 ASSOC_TOOMANY 引发。
+     - 乐鑫特有的 Wi-Fi 原因代码： association 失败，但并非由 DISASSOC_DUE_TO_INACTIVITY 或 ASSOC_TOOMANY 引发。
    * - HANDSHAKE_TIMEOUT
      - 204
      - 保留
@@ -1667,7 +1699,7 @@ Wi-Fi Easy Connect™ (DPP)
 Wi-Fi Easy Connect\ :sup:`TM` （也称为设备配置协议）是一个安全且标准化的配置协议，用于配置 Wi-Fi 设备。更多信息请参考 :doc:`esp_dpp <../api-reference/network/esp_dpp>`。
 
 WPA2-Enterprise
-+++++++++++++++++++++++++++++++++
+---------------
 
 WPA2-Enterprise 是企业无线网络的安全认证机制。在连接到接入点之前，它使用 RADIUS 服务器对网络用户进行身份验证。身份验证过程基于 802.1X 标准，并有不同的扩展身份验证协议 (EAP) 方法，如 TLS、TTLS、PEAP 等。RADIUS 服务器根据用户的凭据（用户名和密码）、数字证书或两者对用户进行身份验证。当处于 station 模式的 {IDF_TARGET_NAME} 尝试连接到企业模式的 AP 时，它会向 AP 发送身份验证请求，AP 会将该请求发送到 RADIUS 服务器以对 station 进行身份验证。根据不同的 EAP 方式，可以通过 ``idf.py menuconfig`` 打开配置，并在配置中设置参数。{IDF_TARGET_NAME} 仅在 station 模式下支持 WPA2_Enterprise。
 
@@ -1727,7 +1759,7 @@ WPA2-Enterprise 是企业无线网络的安全认证机制。在连接到接入�
 {IDF_TARGET_NAME} Wi-Fi 节能模式
 -----------------------------------------
 
-本小节将简单介绍Wi-Fi节能模式相关的概念和使用方式，更加详细的介绍请参考 :doc:`低功耗模式使用指南 <../api-guides/low-power-mode>`。
+本小节将简单介绍Wi-Fi节能模式相关的概念和使用方式，更加详细的介绍请参考 :doc:`低功耗模式使用指南 <../api-guides/low-power-mode/index>`。
 
 station 睡眠
 ++++++++++++++++++++++
@@ -1797,7 +1829,11 @@ AP 睡眠
 
  - 在 `Interval` 开始时，将会给出 `WIFI_EVENT_CONNECTIONLESS_MODULE_WAKE_INTERVAL_START`_ 事件，由于 `Window` 将在此时开始，可以在此事件内布置发包动作。
 
- - 在连接状态下，`Interval` 开始的时间点将会与 TBTT 时间点对齐。
+ - 在连接状态下，`Interval` 开始的时间点将会与 TBTT 时间点对齐。可以通过将非连接模块的接收端和发送端连接在同一路由器下，并在 `WIFI_EVENT_CONNECTIONLESS_MODULE_WAKE_INTERVAL_START`_ 事件内进行发包，以同步非连接模块的传输窗口，达到提高接收端收包成功率的效果。
+
+ .. only:: esp32
+
+    在 ESP32 上，TBTT 时间点会受到 DFS(Dynamic Frequency Scaling) 的干扰，如果想要在 ESP32 上通过 TBTT 同步非连接模块的传输窗口，需要禁用 DFS。
 
 **Window**
 
@@ -1967,6 +2003,94 @@ AP 睡眠
 
     使用 iperf example 测试吞吐量时，sdkconfig 是 :idf_file:`examples/wifi/iperf/sdkconfig.defaults.esp32c3`。
 
+.. only:: esp32c5
+
+    - 2.4 GHz 频段
+
+     .. list-table::
+        :header-rows: 1
+        :widths: 10 10 10 15 20
+
+        * - 类型/吞吐量
+          - 实验室空气状况
+          - 屏蔽箱
+          - 测试工具
+          - IDF 版本 (commit ID)
+        * - 原始 802.11 数据包接收数据
+          - N/A
+          - **130 MBit/s**
+          - 内部工具
+          - N/A
+        * - 原始 802.11 数据包发送数据
+          - N/A
+          - **130 MBit/s**
+          - 内部工具
+          - N/A
+        * - UDP 接收数据
+          - 30 MBit/s
+          - 68 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - UDP 发送数据
+          - 30 MBit/s
+          - 63 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - TCP 接收数据
+          - 20 MBit/s
+          - 59 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - TCP 发送数据
+          - 20 MBit/s
+          - 49 MBit/s
+          - iperf example
+          - 7ff0a07d
+
+    - 5 GHz 频段
+
+     .. list-table::
+        :header-rows: 1
+        :widths: 10 10 10 15 20
+
+        * - 类型/吞吐量
+          - 实验室空气状况
+          - 屏蔽箱
+          - 测试工具
+          - IDF 版本 (commit ID)
+        * - 原始 802.11 数据包接收数据
+          - N/A
+          - **130 MBit/s**
+          - 内部工具
+          - N/A
+        * - 原始 802.11 数据包发送数据
+          - N/A
+          - **130 MBit/s**
+          - 内部工具
+          - N/A
+        * - UDP 接收数据
+          - 30 MBit/s
+          - 71 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - UDP 发送数据
+          - 30 MBit/s
+          - 64 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - TCP 接收数据
+          - 20 MBit/s
+          - 61 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - TCP 发送数据
+          - 20 MBit/s
+          - 50 MBit/s
+          - iperf example
+          - 7ff0a07d
+
+    使用 iperf example 测试吞吐量时，sdkconfig 是 :idf_file:`examples/wifi/iperf/sdkconfig.defaults.esp32c5`。
+
 .. only:: esp32c6
 
      .. list-table::
@@ -1990,26 +2114,70 @@ AP 睡眠
           - N/A
         * - UDP 接收数据
           - 30 MBit/s
-          - 45 MBit/s
+          - 63 MBit/s
           - iperf example
-          - 420ebd20
+          - 7ff0a07d
         * - UDP 发送数据
           - 30 MBit/s
-          - 40 MBit/s
+          - 51 MBit/s
           - iperf example
-          - 420ebd20
+          - 7ff0a07d
         * - TCP 接收数据
           - 20 MBit/s
-          - 30 MBit/s
+          - 46 MBit/s
           - iperf example
-          - 420ebd20
+          - 7ff0a07d
         * - TCP 发送数据
           - 20 MBit/s
-          - 31 MBit/s
+          - 43 MBit/s
           - iperf example
-          - 420ebd20
+          - 7ff0a07d
 
     使用 iperf example 测试吞吐量时，sdkconfig 是 :idf_file:`examples/wifi/iperf/sdkconfig.defaults.esp32c6`。
+
+.. only:: esp32c61
+
+     .. list-table::
+        :header-rows: 1
+        :widths: 10 10 10 15 20
+
+        * - 类型/吞吐量
+          - 实验室空气状况
+          - 屏蔽箱
+          - 测试工具
+          - IDF 版本 (commit ID)
+        * - 原始 802.11 数据包接收数据
+          - N/A
+          - **130 MBit/s**
+          - 内部工具
+          - N/A
+        * - 原始 802.11 数据包发送数据
+          - N/A
+          - **130 MBit/s**
+          - 内部工具
+          - N/A
+        * - UDP 接收数据
+          - 30 MBit/s
+          - 68 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - UDP 发送数据
+          - 30 MBit/s
+          - 53 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - TCP 接收数据
+          - 20 MBit/s
+          - 45 MBit/s
+          - iperf example
+          - 7ff0a07d
+        * - TCP 发送数据
+          - 20 MBit/s
+          - 37 MBit/s
+          - iperf example
+          - 7ff0a07d
+
+    使用 iperf example 测试吞吐量时，sdkconfig 是 :idf_file:`examples/wifi/iperf/sdkconfig.defaults.esp32c61`。
 
 .. only:: esp32s3
 
@@ -2136,7 +2304,7 @@ Wi-Fi Sniffer 模式可以通过 :cpp:func:`esp_wifi_set_promiscuous()` 使能�
 
  - 802.11 其它错误帧
 
-对于 Sniffer 模式 **可以** 转储的帧，应用程序可以另外使用 :cpp:func:`esp_wifi_set_promiscuous_filter()` 和 :cpp:func:`esp_wifi_set_promiscuous_ctrl_filter()` 决定筛选哪些特定类型的数据包。应用程序默认筛选所有 802.11 数据和管理帧。
+对于 Sniffer 模式 **可以** 转储的帧，应用程序可以另外使用 :cpp:func:`esp_wifi_set_promiscuous_filter()` 和 :cpp:func:`esp_wifi_set_promiscuous_ctrl_filter()` 决定筛选哪些特定类型的数据包。应用程序默认筛选所有 802.11 数据和管理帧。如果你想要筛选 802.11 控制帧，:cpp:func:`esp_wifi_set_promiscuous_filter()` 中的 filter 参数需要包含 “WIFI_PROMIS_FILTER_MASK_CTRL” 类型， 如果你想进一步区分 802.11 控制帧，那么调用 :cpp:func:`esp_wifi_set_promiscuous_ctrl_filter()`。
 
 可以在 WIFI_MODE_NULL、WIFI_MODE_STA、WIFI_MODE_AP、WIFI_MODE_APSTA 等 Wi-Fi 模式下使能 Wi-Fi Sniffer 模式。也就是说，当 station 连接到 AP，或者 AP 有 Wi-Fi 连接时，就可以使能。请注意，Sniffer 模式对 station/AP Wi-Fi 连接的吞吐量有 **很大影响**。通常，除非有特别原因，当 station/AP Wi-Fi 连接出现大量流量，不应使能。
 
@@ -2144,68 +2312,7 @@ Wi-Fi Sniffer 模式可以通过 :cpp:func:`esp_wifi_set_promiscuous()` 使能�
 
 Wi-Fi 多根天线
 --------------------------
-下图描述 Wi-Fi 多根天线的选择过程::
-
-                    __________
-                   |Enabled   |
-                ___|Antenna 0 |\\                                              _________
-                   |__________| \\        GPIO[0] <----> antenna_select[0] ---|         | --- antenna 0
-    RX/TX ___                    \\____\  GPIO[1] <----> antenna_select[1] ---| Antenna | --- antenna 1
-             \      __________   //    /  GPIO[2] <----> antenna_select[2] ---| Switch  | ...  ...
-              \ ___|Enabled   | //        GPIO[3] <----> antenna_select[3] ---|_________| --- antenna 15
-               \   |Antenna 1 |//
-                   |__________|
-
-
-{IDF_TARGET_NAME} 通过外部天线开关，最多支持 16 根天线。天线开关最多可由四个地址管脚控制 - antenna_select[0:3]。向 antenna_select[0:3] 输入不同的值，以选择不同的天线。例如，输入值 '0b1011' 表示选中天线 11。antenna_select[3:0] 的默认值为 "0b0000"，表示默认选择了天线 0。
-
-四个高电平有效 antenna_select 管脚有多达四个 GPIO 连接。{IDF_TARGET_NAME} 可以通过控制 GPIO[0:3] 选择天线。API :cpp:func:`esp_wifi_set_ant_gpio()` 用于配置 antenna_selects 连接哪些 GPIO。如果 GPIO[x] 连接到 antenna_select[x]，gpio_config->gpio_cfg[x].gpio_select 应设置为 1，且要提供 gpio_config->gpio_cfg[x].gpio_num 的值。
-
-天线开关的具体实现不同，`antenna_select[0:3]` 的输入值中可能存在非法值，即 {IDF_TARGET_NAME} 通过外部天线开关支持的天线数可能小于 16 根。例如，ESP32-WROOM-DA 使用 RTC6603SP 作为天线开关，仅支持 2 根天线。两个天线选择输入管脚为高电平有效，连接到两个 GPIO。'0b01' 表示选中天线 0，'0b10' 表示选中天线 1。输入值 '0b00' 和 '0b11' 为非法值。
-
-尽管最多支持 16 根天线，发送和接收数据时，最多仅能同时使能两根天线。API :cpp:func:`esp_wifi_set_ant()` 用于配置使能哪些天线。
-
-使能天线后，选择算法的过程同样可由 :cpp:func:`esp_wifi_set_ant()` 配置。接收/发送数据源的天线模式可以是 WIFI_ANT_MODE_ANT0、WIFI_ANT_MODE_ANT1 或 WIFI_ANT_MODE_AUTO。如果天线模式为 WIFI_ANT_MODE_ANT0，使能的天线 0 用于接收/发送数据。如果天线模式为 WIFI_ANT_MODE_ANT1，使能天线 1 用于接收/发送数据。否则，Wi-Fi 会自动选择使能天线中信号较好的天线。
-
-如果接收数据的天线模式为 WIFI_ANT_MODE_AUTO，还需要设置默认天线模式。只有在满足某些条件时，接收数据天线才会切换，例如，如果 RSSI 低于 -65 dBm，或另一根天线信号更好。如果条件不满足，接收数据使用默认天线。如果默认天线模式为 WIFI_ANT_MODE_ANT1，则使能的天线 1 是默认接收数据天线，否则是使能的天线 0。
-
-有一些限制情况需要考虑：
-
- - 因为发送数据天线基于 WIFI_ANT_MODE_AUTO 类型的接收数据天线选择算法，只有接收数据的天线模式为 WIFI_ANT_MODE_AUTO 时，发送数据天线才能设置为 WIFI_ANT_MODE_AUTO。
- - 接收或者发送天线模式配置为 WIFI_ANT_MODE_AUTO 时，只要存在 RF 信号的恶化，很容易触发天线切换。如果射频信号不稳定，天线会频繁切换，使得总的射频性能无法达到预期效果。
- - 目前，Bluetooth® 不支持多根天线功能，请不要使用与多根天线有关的 API。
-
-推荐在以下场景中使用多根天线：
-
- - 应用程序可以始终选择指定的天线，也可以执行自身天线选择算法，如根据应用程序收集的信息来选择天线模式等。请参考 IDF 示例 :idf_file:`examples/wifi/antenna/README.md` 来设计天线选择算法。
- - 接收/发送数据的天线模式均配置为 WIFI_ANT_MODE_ANT0 或 WIFI_ANT_MODE_ANT1。
-
-
-Wi-Fi 多根天线配置
-+++++++++++++++++++++++++++++++++++++
-
-通常，可以执行以下步骤来配置多根天线：
-
-- 配置 antenna_selects 连接哪些 GPIOs，例如，如果支持四根天线，且 GPIO20/GPIO21 连接到 antenna_select[0]/antenna_select[1]，配置如下所示:
-
-.. code-block:: c
-
-    wifi_ant_gpio_config_t ant_gpio_config = {
-        .gpio_cfg[0] = { .gpio_select = 1, .gpio_num = 20 },
-        .gpio_cfg[1] = { .gpio_select = 1, .gpio_num = 21 }
-    };
-
-- 配置使能哪些天线、以及接收/发送数据如何使用使能的天线，例如，如果使能了天线 1 和天线 3，接收数据需要自动选择较好的天线，并将天线 1 作为默认天线，发送数据始终选择天线 3。配置如下所示:
-
-.. code-block:: c
-
-    wifi_ant_config_t config = {
-        .rx_ant_mode = WIFI_ANT_MODE_AUTO,
-        .rx_ant_default = WIFI_ANT_ANT0,
-        .tx_ant_mode = WIFI_ANT_MODE_ANT1,
-        .enabled_ant0 = 1,
-        .enabled_ant1 = 3
-    };
+具体请参考 :doc:`PHY <../api-guides/phy>`。
 
 .. only:: SOC_WIFI_CSI_SUPPORT
 
@@ -2592,29 +2699,29 @@ Wi-Fi 使用的堆内存峰值是 Wi-Fi 驱动程序 **理论上消耗的最大�
           - 12
           - 8
         * - WIFI_IRAM_OPT
-          - 15
-          - 15
-          - 15
-          - 15
-          - 15
-          - 15
-          - 15
+          - 开启
+          - 开启
+          - 开启
+          - 开启
+          - 开启
+          - 开启
+          - 开启
         * - WIFI_RX_IRAM_OPT
-          - 16
-          - 16
-          - 16
-          - 16
-          - 16
-          - 16
-          - 16
+          - 开启
+          - 开启
+          - 开启
+          - 开启
+          - 开启
+          - 开启
+          - 开启
         * - LWIP_IRAM_OPTIMIZATION
-          - 13
-          - 13
-          - 13
-          - 13
-          - 13
-          - 13
-          - 13
+          - 开启
+          - 开启
+          - 开启
+          - 开启
+          - 开启
+          - 开启
+          - 开启
         * - TCP 发送数据吞吐量 (Mbit/s)
           - 74.6
           - 50.8
@@ -2704,23 +2811,23 @@ Wi-Fi 使用的堆内存峰值是 Wi-Fi 驱动程序 **理论上消耗的最大�
           - 8
           - 6
         * - WIFI_IRAM_OPT
-          - 15
-          - 15
-          - 15
-          - 15
-          - 0
+          - 开启
+          - 开启
+          - 开启
+          - 开启
+          - 关闭
         * - WIFI_RX_IRAM_OPT
-          - 16
-          - 16
-          - 16
-          - 0
-          - 0
+          - 开启
+          - 开启
+          - 开启
+          - 关闭
+          - 关闭
         * - LWIP_IRAM_OPTIMIZATION
-          - 13
-          - 13
-          - 0
-          - 0
-          - 0
+          - 开启
+          - 开启
+          - 关闭
+          - 关闭
+          - 关闭
         * - INSTRUCTION_CACHE
           - 16
           - 16
@@ -2797,9 +2904,9 @@ Wi-Fi 使用的堆内存峰值是 Wi-Fi 驱动程序 **理论上消耗的最大�
           - 16
           - 6
         * - LWIP_IRAM_OPTIMIZATION
-          - 13
-          - 13
-          - 0
+          - 开启
+          - 开启
+          - 关闭
         * - TCP 发送数据吞吐量 (Mbit/s)
           - 38.1
           - 27.2
@@ -2856,9 +2963,9 @@ Wi-Fi 使用的堆内存峰值是 Wi-Fi 驱动程序 **理论上消耗的最大�
           - 16
           - 6
         * - LWIP_IRAM_OPTIMIZATION
-          - 13
-          - 13
-          - 0
+          - 开启
+          - 开启
+          - 关闭
         * - TCP 发送数据吞吐量 (Mbit/s)
           - 30.5
           - 25.9
@@ -2915,9 +3022,9 @@ Wi-Fi 使用的堆内存峰值是 Wi-Fi 驱动程序 **理论上消耗的最大�
           - 14
           - 6
         * - LWIP_IRAM_OPTIMIZATION
-          - 13
-          - 13
-          - 0
+          - 开启
+          - 开启
+          - 关闭
         * - TCP 发送数据吞吐量 (Mbit/s)
           - 21.6
           - 21.4
@@ -2974,17 +3081,17 @@ Wi-Fi 使用的堆内存峰值是 Wi-Fi 驱动程序 **理论上消耗的最大�
           - 32
           - 6
         * - WIFI_IRAM_OPT
-          - 15
-          - 15
-          - 15
+          - 开启
+          - 开启
+          - 开启
         * - WIFI_RX_IRAM_OPT
-          - 16
-          - 16
-          - 16
+          - 开启
+          - 开启
+          - 开启
         * - LWIP_IRAM_OPTIMIZATION
-          - 13
-          - 13
-          - 0
+          - 开启
+          - 开启
+          - 关闭
         * - INSTRUCTION_CACHE
           - 32
           - 32
@@ -3150,20 +3257,20 @@ Wi-Fi 使用的堆内存峰值是 Wi-Fi 驱动程序 **理论上消耗的最大�
                - 65
                - 65
              * - WIFI_IRAM_OPT
-               - 15
-               - 15
-               - 15
-               - 0
+               - 开启
+               - 开启
+               - 开启
+               - 关闭
              * - WIFI_RX_IRAM_OPT
-               - 16
-               - 16
-               - 0
-               - 0
+               - 开启
+               - 开启
+               - 关闭
+               - 关闭
              * - LWIP_IRAM_OPTIMIZATION
-               - 13
-               - 0
-               - 0
-               - 0
+               - 开启
+               - 关闭
+               - 关闭
+               - 关闭
              * - TCP 发送数据吞吐量 (Mbit/s)
                - 37.5
                - 31.7
@@ -3232,20 +3339,20 @@ Wi-Fi 使用的堆内存峰值是 Wi-Fi 驱动程序 **理论上消耗的最大�
                - 32
                - 32
              * - WIFI_IRAM_OPT
-               - 15
-               - 15
-               - 15
-               - 0
+               - 开启
+               - 开启
+               - 开启
+               - 关闭
              * - WIFI_RX_IRAM_OPT
-               - 16
-               - 16
-               - 0
-               - 0
+               - 开启
+               - 开启
+               - 关闭
+               - 关闭
              * - LWIP_IRAM_OPTIMIZATION
-               - 13
-               - 0
-               - 0
-               - 0
+               - 开启
+               - 关闭
+               - 关闭
+               - 关闭
              * - INSTRUCTION_CACHE
                - 16
                - 16
@@ -3339,20 +3446,20 @@ Wi-Fi 使用的堆内存峰值是 Wi-Fi 驱动程序 **理论上消耗的最大�
                - 32
                - 32
              * - WIFI_IRAM_OPT
-               - 15
-               - 15
-               - 15
-               - 0
+               - 开启
+               - 开启
+               - 开启
+               - 关闭
              * - WIFI_RX_IRAM_OPT
-               - 16
-               - 16
-               - 0
-               - 0
+               - 开启
+               - 开启
+               - 关闭
+               - 关闭
              * - LWIP_IRAM_OPTIMIZATION
-               - 13
-               - 0
-               - 0
-               - 0
+               - 开启
+               - 关闭
+               - 关闭
+               - 关闭
              * - LWIP_UDP_RECVMBOX_SIZE
                - 16
                - 16
@@ -3456,20 +3563,20 @@ Wi-Fi 使用的堆内存峰值是 Wi-Fi 驱动程序 **理论上消耗的最大�
                - 32
                - 32
              * - WIFI_IRAM_OPT
-               - 15
-               - 15
-               - 15
-               - 0
+               - 开启
+               - 开启
+               - 开启
+               - 关闭
              * - WIFI_RX_IRAM_OPT
-               - 16
-               - 16
-               - 0
-               - 0
+               - 开启
+               - 开启
+               - 关闭
+               - 关闭
              * - LWIP_IRAM_OPTIMIZATION
-               - 13
-               - 0
-               - 0
-               - 0
+               - 开启
+               - 关闭
+               - 关闭
+               - 关闭
              * - LWIP_UDP_RECVMBOX_SIZE
                - 16
                - 16

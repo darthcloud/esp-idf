@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "esp_memory_utils.h"
 #include "soc/soc_caps.h"
+#include "soc/uart_pins.h"
 
 #include "sdkconfig.h"
 
@@ -21,12 +22,9 @@
 #include "hal/gpio_hal.h"
 #include "hal/rtc_io_hal.h"
 #include "soc/rtc_io_periph.h"
+#include "soc/uart_channel.h"
 
-#if SOC_LP_AON_SUPPORTED
-#include "hal/lp_aon_hal.h"
-#else
 #include "hal/rtc_hal.h"
-#endif
 
 #include "esp_private/gpio.h"
 #include "esp_private/sleep_gpio.h"
@@ -34,7 +32,7 @@
 #include "esp_private/startup_internal.h"
 #include "bootloader_flash.h"
 
-static const char *TAG = "sleep";
+static const char *TAG = "sleep_gpio";
 
 #if CONFIG_GPIO_ESP32_SUPPORT_SWITCH_SLP_PULL
 void gpio_sleep_mode_config_apply(void)
@@ -66,21 +64,13 @@ void esp_sleep_config_gpio_isolate(void)
         }
     }
 
-#if CONFIG_ESP_SLEEP_PSRAM_LEAKAGE_WORKAROUND && CONFIG_SPIRAM
-    gpio_sleep_set_pull_mode(esp_mspi_get_io(ESP_MSPI_IO_CS1), GPIO_PULLUP_ONLY);
-#endif // CONFIG_ESP_SLEEP_PSRAM_LEAKAGE_WORKAROUND && CONFIG_SPIRAM
-
-#if CONFIG_ESP_SLEEP_FLASH_LEAKAGE_WORKAROUND
-    gpio_sleep_set_pull_mode(esp_mspi_get_io(ESP_MSPI_IO_CS0), GPIO_PULLUP_ONLY);
-#endif // CONFIG_ESP_SLEEP_FLASH_LEAKAGE_WORKAROUND
-
-#if CONFIG_ESP_SLEEP_MSPI_NEED_ALL_IO_PU
+#if CONFIG_ESP_SLEEP_MSPI_NEED_ALL_IO_PU && !SOC_MSPI_HAS_INDEPENT_IOMUX
     gpio_sleep_set_pull_mode(esp_mspi_get_io(ESP_MSPI_IO_CLK), GPIO_PULLUP_ONLY);
     gpio_sleep_set_pull_mode(esp_mspi_get_io(ESP_MSPI_IO_Q),   GPIO_PULLUP_ONLY);
     gpio_sleep_set_pull_mode(esp_mspi_get_io(ESP_MSPI_IO_D),   GPIO_PULLUP_ONLY);
     gpio_sleep_set_pull_mode(esp_mspi_get_io(ESP_MSPI_IO_HD),  GPIO_PULLUP_ONLY);
     gpio_sleep_set_pull_mode(esp_mspi_get_io(ESP_MSPI_IO_WP),  GPIO_PULLUP_ONLY);
-#if SOC_SPI_MEM_SUPPORT_OPI_MODE
+#if SOC_SPI_MEM_SUPPORT_FLASH_OPI_MODE
     bool octal_mspi_required = bootloader_flash_is_octal_mode_enabled();
 #if CONFIG_SPIRAM_MODE_OCT
     octal_mspi_required |= true;
@@ -92,7 +82,7 @@ void esp_sleep_config_gpio_isolate(void)
         gpio_sleep_set_pull_mode(esp_mspi_get_io(ESP_MSPI_IO_D6),  GPIO_PULLUP_ONLY);
         gpio_sleep_set_pull_mode(esp_mspi_get_io(ESP_MSPI_IO_D7),  GPIO_PULLUP_ONLY);
     }
-#endif // SOC_SPI_MEM_SUPPORT_OPI_MODE
+#endif // SOC_SPI_MEM_SUPPORT_FLASH_OPI_MODE
 #endif // CONFIG_ESP_SLEEP_MSPI_NEED_ALL_IO_PU
 }
 
@@ -101,6 +91,33 @@ void esp_sleep_enable_gpio_switch(bool enable)
     ESP_EARLY_LOGI(TAG, "%s automatic switching of GPIO sleep configuration", enable ? "Enable" : "Disable");
     for (gpio_num_t gpio_num = GPIO_NUM_0; gpio_num < GPIO_NUM_MAX; gpio_num++) {
         if (GPIO_IS_VALID_GPIO(gpio_num)) {
+#if CONFIG_ESP_CONSOLE_UART
+#if CONFIG_ESP_CONSOLE_UART_CUSTOM
+            const int uart_tx_gpio = (CONFIG_ESP_CONSOLE_UART_TX_GPIO >= 0) ? CONFIG_ESP_CONSOLE_UART_TX_GPIO : UART_NUM_0_TXD_DIRECT_GPIO_NUM;
+            const int uart_rx_gpio = (CONFIG_ESP_CONSOLE_UART_RX_GPIO >= 0) ? CONFIG_ESP_CONSOLE_UART_RX_GPIO : UART_NUM_0_RXD_DIRECT_GPIO_NUM;
+            if ((gpio_num == uart_tx_gpio) || (gpio_num == uart_rx_gpio)) {
+#else
+            if ((gpio_num == UART_NUM_0_TXD_DIRECT_GPIO_NUM) || (gpio_num == UART_NUM_0_RXD_DIRECT_GPIO_NUM)) {
+#endif
+                gpio_sleep_sel_dis(gpio_num);
+                continue;
+            }
+#endif
+            /* If the PSRAM is disable in ESP32xx chips equipped with PSRAM, there will be a large current leakage. */
+#if CONFIG_ESP_SLEEP_PSRAM_LEAKAGE_WORKAROUND && CONFIG_SPIRAM & !SOC_MSPI_HAS_INDEPENT_IOMUX
+            if (gpio_num == esp_mspi_get_io(ESP_MSPI_IO_CS1)) {
+                gpio_sleep_sel_dis(gpio_num);
+                continue;
+            }
+#endif // CONFIG_ESP_SLEEP_PSRAM_LEAKAGE_WORKAROUND && CONFIG_SPIRAM
+
+#if CONFIG_ESP_SLEEP_FLASH_LEAKAGE_WORKAROUND & !SOC_MSPI_HAS_INDEPENT_IOMUX
+            if (gpio_num == esp_mspi_get_io(ESP_MSPI_IO_CS0)) {
+                gpio_sleep_sel_dis(gpio_num);
+                continue;
+            }
+#endif // CONFIG_ESP_SLEEP_FLASH_LEAKAGE_WORKAROUND
+
             if (enable) {
                 gpio_sleep_sel_en(gpio_num);
             } else {
@@ -110,7 +127,7 @@ void esp_sleep_enable_gpio_switch(bool enable)
     }
 }
 
-#if !SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
+#if SOC_GPIO_SUPPORT_HOLD_IO_IN_DSLP && !SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
 IRAM_ATTR void esp_sleep_isolate_digital_gpio(void)
 {
     gpio_hal_context_t gpio_hal = {
@@ -135,6 +152,23 @@ IRAM_ATTR void esp_sleep_isolate_digital_gpio(void)
     /* isolate digital IO that is not held(keep the configuration of digital IOs held by users) */
     for (gpio_num_t gpio_num = GPIO_NUM_0; gpio_num < GPIO_NUM_MAX; gpio_num++) {
         if (GPIO_IS_VALID_DIGITAL_IO_PAD(gpio_num) && !gpio_hal_is_digital_io_hold(&gpio_hal, gpio_num)) {
+
+            bool is_mspi_io_pad = false;
+            esp_mspi_io_t mspi_ios[] = { ESP_MSPI_IO_CS0, ESP_MSPI_IO_CLK, ESP_MSPI_IO_Q, ESP_MSPI_IO_D, ESP_MSPI_IO_HD, ESP_MSPI_IO_WP };
+            for (int i = 0; i < sizeof(mspi_ios) / sizeof(mspi_ios[0]); i++) {
+                if (esp_mspi_get_io(mspi_ios[i]) == gpio_num) {
+                    is_mspi_io_pad = true;
+                    break;
+                }
+            }
+            // Ignore MSPI and default Console UART io pads, When the CPU executes
+            // the following instructions to configure the MSPI IO PAD, access on
+            // the MSPI signal lines (as CPU instruction execution and MSPI access
+            // operations are asynchronous) may cause the SoC to hang.
+            if (is_mspi_io_pad || gpio_num == U0RXD_GPIO_NUM || gpio_num == U0TXD_GPIO_NUM) {
+                continue;
+            }
+
             /* disable I/O */
             gpio_hal_input_disable(&gpio_hal, gpio_num);
             gpio_hal_output_disable(&gpio_hal, gpio_num);
@@ -148,8 +182,9 @@ IRAM_ATTR void esp_sleep_isolate_digital_gpio(void)
         }
     }
 }
-#endif // !SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
+#endif //SOC_GPIO_SUPPORT_HOLD_IO_IN_DSLP && !SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
 
+#if SOC_DEEP_SLEEP_SUPPORTED
 void esp_deep_sleep_wakeup_io_reset(void)
 {
 #if SOC_PM_SUPPORT_EXT1_WAKEUP
@@ -183,19 +218,21 @@ void esp_deep_sleep_wakeup_io_reset(void)
     }
 #endif
 }
+#endif
 
 #if CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND || CONFIG_PM_SLP_DISABLE_GPIO
 ESP_SYSTEM_INIT_FN(esp_sleep_startup_init, SECONDARY, BIT(0), 105)
 {
-/* If the TOP domain is powered off, the GPIO will also be powered off during sleep,
-   and all configurations in the sleep state of GPIO will not take effect.*/
-#if !CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP
     // Configure to isolate (disable the Input/Output/Pullup/Pulldown
     // function of the pin) all GPIO pins in sleep state
     esp_sleep_config_gpio_isolate();
-#endif
     // Enable automatic switching of GPIO configuration
     esp_sleep_enable_gpio_switch(true);
     return ESP_OK;
+}
+
+void esp_sleep_gpio_include(void)
+{
+    // Linker hook function, exists to make the linker examine this file
 }
 #endif

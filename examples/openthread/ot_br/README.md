@@ -52,7 +52,7 @@ Two ways are provided to setup the Thread Border Router in this example:
 
 - Auto Start
 Enable `OPENTHREAD_BR_AUTO_START`, configure the `CONFIG_EXAMPLE_WIFI_SSID` and `CONFIG_EXAMPLE_WIFI_PASSWORD` with your access point's ssid and psk.
-The device will connect to Wi-Fi and form a Thread network automatically after bootup.
+The device will connect to Wi-Fi and form a Thread network automatically after boot up.
 
 - Manual mode
 Disable `OPENTHREAD_BR_AUTO_START` and enable `OPENTHREAD_CLI_ESP_EXTENSION`. `wifi` command will be added for connecting the device to the Wi-Fi network.

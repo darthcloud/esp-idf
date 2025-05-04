@@ -29,7 +29,9 @@
 #include "soc/soc_caps.h"
 #include "hal/spi_types.h"
 #include "hal/dma_types.h"
+#if SOC_GDMA_SUPPORTED
 #include "soc/gdma_channel.h"
+#endif
 #if SOC_GPSPI_SUPPORTED
 #include "hal/spi_ll.h"
 #endif
@@ -70,10 +72,13 @@ typedef struct {
 typedef struct {
     spi_ll_clock_val_t clock_reg;       ///< Register value used by the LL layer
     spi_clock_source_t clock_source;    ///< Clock source of each device used by LL layer
-    uint32_t source_pre_div;            ///< Pre divider befor enter SPI peripheral
+    uint32_t source_pre_div;            ///< Pre divider before enter SPI peripheral
+    uint32_t source_real_freq;          ///< source freq after pre-divider, this will enter peripheral
+    int expect_freq;                    ///< User expected desired freq config
     int real_freq;                      ///< Output of the actual frequency
     int timing_dummy;                   ///< Extra dummy needed to compensate the timing
     int timing_miso_delay;              ///< Extra miso delay clocks to compensate the timing
+    spi_sampling_point_t rx_sample_point;///< Sample data follow standard SPI timing in master mode
 } spi_hal_timing_conf_t;
 
 /**
@@ -127,9 +132,36 @@ typedef struct {
 #if SOC_SPI_AS_CS_SUPPORTED
         uint32_t as_cs  : 1;            ///< Whether to toggle the CS while the clock toggles, device specific
 #endif
-        uint32_t positive_cs : 1;       ///< Whether the postive CS feature is abled, device specific
+        uint32_t positive_cs : 1;       ///< Whether the positive CS feature is enabled, device specific
     };//boolean configurations
 } spi_hal_dev_config_t;
+
+#if SOC_SPI_SCT_SUPPORTED
+/**
+ * SCT mode required configurations, per segment
+ */
+typedef struct {
+    /* CONF State */
+    bool seg_end;                       ///< True: this segment is the end; False: this segment isn't the end;
+    uint32_t seg_gap_len;               ///< spi clock length of CS inactive on config phase for sct
+    /* PREP State */
+    int cs_setup;                       ///< Setup time of CS active edge before the first SPI clock
+    /* CMD State */
+    uint16_t cmd;                       ///< Command value to be sent
+    int cmd_bits;                       ///< Length (in bits) of the command phase
+    /* ADDR State */
+    uint64_t addr;                      ///< Address value to be sent
+    int addr_bits;                      ///< Length (in bits) of the address phase
+    /* DUMMY State */
+    int dummy_bits;                     ///< Base length (in bits) of the dummy phase.
+    /* DOUT State */
+    int tx_bitlen;                      ///< TX length, in bits
+    /* DIN State */
+    int rx_bitlen;                      ///< RX length, in bits
+    /* DONE State */
+    int cs_hold;                        ///< Hold time of CS inactive edge after the last SPI clock
+} spi_hal_seg_config_t;
+#endif  //#if SOC_SPI_SCT_SUPPORTED
 
 /**
  * Init the peripheral and the context.
@@ -138,6 +170,14 @@ typedef struct {
  * @param host_id    Index of the SPI peripheral. 0 for SPI1, 1 for SPI2 and 2 for SPI3.
  */
 void spi_hal_init(spi_hal_context_t *hal, uint32_t host_id);
+
+/**
+ * Config default output IO level when don't have transaction
+ *
+ * @param hal Context of the HAL layer.
+ * @param level IO level to config
+ */
+void spi_hal_config_io_default_level(spi_hal_context_t *hal, bool level);
 
 /**
  * Deinit the peripheral (and the context if needed).
@@ -264,6 +304,59 @@ void spi_hal_cal_timing(int source_freq_hz, int eff_clk, bool gpio_is_used, int 
  */
 int spi_hal_get_freq_limit(bool gpio_is_used, int input_delay_ns);
 
+#if SOC_SPI_SCT_SUPPORTED
+/*----------------------------------------------------------
+ * Segmented-Configure-Transfer (SCT) Mode
+ * ---------------------------------------------------------*/
+/**
+ * Initialise SCT mode required registers and hal states
+ *
+ * @param hal            Context of the HAL layer.
+ */
+void spi_hal_sct_init(spi_hal_context_t *hal);
+
+/**
+ * Initialise conf buffer, give it an initial value
+ *
+ * @param hal            Context of the HAL layer.
+ */
+void spi_hal_sct_init_conf_buffer(spi_hal_context_t *hal, uint32_t conf_buffer[SOC_SPI_SCT_BUFFER_NUM_MAX]);
+
+/**
+ * Format the conf buffer
+ * According to the `spi_hal_seg_config_t`, update the conf buffer
+ *
+ * @param hal            Context of the HAL layer.
+ * @param config         Conf buffer configuration, per segment. See `spi_hal_seg_config_t` to know what can be configured
+ * @param conf_buffer    Conf buffer
+ */
+void spi_hal_sct_format_conf_buffer(spi_hal_context_t *hal, const spi_hal_seg_config_t *config, const spi_hal_dev_config_t *dev, uint32_t conf_buffer[SOC_SPI_SCT_BUFFER_NUM_MAX]);
+
+/**
+ * Deinit SCT mode related registers and hal states
+ */
+void spi_hal_sct_deinit(spi_hal_context_t *hal);
+
+/**
+ * Set conf_bitslen to HW for sct.
+ */
+void spi_hal_sct_set_conf_bits_len(spi_hal_context_t *hal, uint32_t conf_len);
+
+/**
+ * Clear SPI interrupt bits by mask
+ */
+void spi_hal_clear_intr_mask(spi_hal_context_t *hal, uint32_t mask);
+
+/**
+ * Get SPI interrupt bits status by mask
+ */
+bool spi_hal_get_intr_mask(spi_hal_context_t *hal, uint32_t mask);
+
+/**
+ * Set conf_bitslen base to HW for sct, only supported on s2.
+ */
+#define spi_hal_sct_setup_conf_base(hal, conf_base)     spi_ll_set_conf_base_bitslen((hal)->hw, conf_base)
+#endif  //#if SOC_SPI_SCT_SUPPORTED
 #endif  //#if SOC_GPSPI_SUPPORTED
 
 #ifdef __cplusplus

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -90,8 +90,13 @@ void vPortEnterCritical(void)
 
 void vPortExitCritical(void)
 {
+
+    /* Critical section nesting coung must never be negative */
+    configASSERT( port_uxCriticalNestingIDF > 0 );
+
     if (port_uxCriticalNestingIDF > 0) {
         port_uxCriticalNestingIDF--;
+
         if (port_uxCriticalNestingIDF == 0) {
             // Restore the saved interrupt threshold
             vPortClearInterruptMask((int)port_uxCriticalOldInterruptStateIDF);
@@ -121,11 +126,14 @@ void vPortSetStackWatchpoint(void *pxStackStart)
 
 UBaseType_t ulPortSetInterruptMask(void)
 {
-    int ret;
-    unsigned old_mstatus = RV_CLEAR_CSR(mstatus, MSTATUS_MIE);
-    ret = REG_READ(INTERRUPT_CURRENT_CORE_INT_THRESH_REG);
-    REG_WRITE(INTERRUPT_CURRENT_CORE_INT_THRESH_REG, RVHAL_EXCM_LEVEL);
-    RV_SET_CSR(mstatus, old_mstatus & MSTATUS_MIE);
+    UBaseType_t prev_int_level = 0, int_level = 0;
+#if !SOC_INT_CLIC_SUPPORTED
+    int_level = RVHAL_EXCM_LEVEL;
+#else
+    int_level = RVHAL_EXCM_LEVEL_CLIC;
+#endif
+
+    prev_int_level = rv_utils_set_intlevel_regval(int_level);
     /**
      * In theory, this function should not return immediately as there is a
      * delay between the moment we mask the interrupt threshold register and
@@ -137,12 +145,12 @@ UBaseType_t ulPortSetInterruptMask(void)
      * followed by two instructions: `ret` and `csrrs` (RV_SET_CSR).
      * That's why we don't need any additional nop instructions here.
      */
-    return ret;
+    return prev_int_level;
 }
 
 void vPortClearInterruptMask(UBaseType_t mask)
 {
-    REG_WRITE(INTERRUPT_CURRENT_CORE_INT_THRESH_REG, mask);
+    rv_utils_restore_intlevel_regval(mask);
     /**
      * The delay between the moment we unmask the interrupt threshold register
      * and the moment the potential requested interrupt is triggered is not
@@ -168,8 +176,15 @@ BaseType_t xPortCheckIfInISR(void)
     return uxInterruptNesting;
 }
 
+void vPortAssertIfInISR(void)
+{
+    /* Assert if the interrupt nesting count is > 0 */
+    configASSERT(xPortCheckIfInISR() == 0);
+}
+
 // ------------------ Critical Sections --------------------
 
+#if ( configNUMBER_OF_CORES > 1 )
 void IRAM_ATTR vPortTakeLock( portMUX_TYPE *lock )
 {
     spinlock_acquire( lock, portMUX_NO_TIMEOUT);
@@ -179,6 +194,7 @@ void IRAM_ATTR vPortReleaseLock( portMUX_TYPE *lock )
 {
     spinlock_release( lock );
 }
+#endif /* configNUMBER_OF_CORES > 1 */
 
 // ---------------------- Yielding -------------------------
 
@@ -286,7 +302,7 @@ BaseType_t xPortStartScheduler(void)
     /* Setup the hardware to generate the tick. */
     vPortSetupTimer();
 
-    esprv_int_set_threshold(1); /* set global INTC masking level */
+    esprv_int_set_threshold(RVHAL_INTR_ENABLE_THRESH); /* set global interrupt masking level */
     rv_utils_intr_global_enable();
 
     vPortYield();
@@ -330,64 +346,48 @@ void vPortEndScheduler(void)
 FORCE_INLINE_ATTR UBaseType_t uxInitialiseStackTLS(UBaseType_t uxStackPointer, uint32_t *ret_threadptr_reg_init)
 {
     /*
-    TLS layout at link-time, where 0xNNN is the offset that the linker calculates to a particular TLS variable.
-
     LOW ADDRESS
             |---------------------------|   Linker Symbols
             | Section                   |   --------------
-            | .flash.rodata             |
-         0x0|---------------------------| <- _flash_rodata_start
-          ^ | Other Data                |
-          | |---------------------------| <- _thread_local_start
-          | | .tbss                     | ^
-          V |                           | |
-      0xNNN | int example;              | | tls_area_size
-            |                           | |
-            | .tdata                    | V
-            |---------------------------| <- _thread_local_end
+            | .flash.tdata              |
+         0x0|---------------------------| <- _thread_local_data_start  ^
+            | .flash.tdata              |                              |
+            | int var_1 = 1;            |                              |
+            |                           | <- _thread_local_data_end    |
+            |                           | <- _thread_local_bss_start   | tls_area_size
+            |                           |                              |
+            | .flash.tbss (NOLOAD)      |                              |
+            | int var_2;                |                              |
+            |---------------------------| <- _thread_local_bss_end     V
             | Other data                |
             | ...                       |
             |---------------------------|
     HIGH ADDRESS
     */
     // Calculate TLS area size and round up to multiple of 16 bytes.
-    extern char _thread_local_start, _thread_local_end, _flash_rodata_start;
-    const uint32_t tls_area_size = ALIGNUP(16, (uint32_t)&_thread_local_end - (uint32_t)&_thread_local_start);
+    extern char _thread_local_data_start, _thread_local_data_end;
+    extern char _thread_local_bss_start, _thread_local_bss_end;
+    const uint32_t tls_data_size = (uint32_t)&_thread_local_data_end - (uint32_t)&_thread_local_data_start;
+    const uint32_t tls_bss_size = (uint32_t)&_thread_local_bss_end - (uint32_t)&_thread_local_bss_start;
+    const uint32_t tls_area_size = ALIGNUP(16, tls_data_size + tls_bss_size);
     // TODO: check that TLS area fits the stack
 
     // Allocate space for the TLS area on the stack. The area must be aligned to 16-bytes
     uxStackPointer = STACKPTR_ALIGN_DOWN(16, uxStackPointer - (UBaseType_t)tls_area_size);
-    // Initialize the TLS area with the initialization values of each TLS variable
-    memcpy((void *)uxStackPointer, &_thread_local_start, tls_area_size);
+    // Initialize the TLS data with the initialization values of each TLS variable
+    memcpy((void *)uxStackPointer, &_thread_local_data_start, tls_data_size);
+    // Initialize the TLS bss with zeroes
+    memset((void *)(uxStackPointer + tls_data_size), 0, tls_bss_size);
 
-    /*
-    Calculate the THREADPTR register's initialization value based on the link-time offset and the TLS area allocated on
-    the stack.
-
-    HIGH ADDRESS
-            |---------------------------|
-            | .tdata (*)                |
-          ^ | int example;              |
-          | |                           |
-          | | .tbss (*)                 |
-          | |---------------------------| <- uxStackPointer (start of TLS area)
-    0xNNN | |                           | ^
-          | |                           | |
-          |             ...               | _thread_local_start - _rodata_start
-          | |                           | |
-          | |                           | V
-          V |                           | <- threadptr register's value
-
-    LOW ADDRESS
-    */
-    *ret_threadptr_reg_init = (uint32_t)uxStackPointer - ((uint32_t)&_thread_local_start - (uint32_t)&_flash_rodata_start);
+    // Save tls start address
+    *ret_threadptr_reg_init = (uint32_t)uxStackPointer;
     return uxStackPointer;
 }
 
 #if CONFIG_FREERTOS_TASK_FUNCTION_WRAPPER
 static void vPortTaskWrapper(TaskFunction_t pxCode, void *pvParameters)
 {
-    __asm__ volatile(".cfi_undefined ra");  // tell to debugger that it's outermost (inital) frame
+    __asm__ volatile(".cfi_undefined ra");  // tell to debugger that it's outermost (initial) frame
     extern void __attribute__((noreturn)) panic_abort(const char *details);
     static char DRAM_ATTR msg[80] = "FreeRTOS: FreeRTOS Task \"\0";
     pxCode(pvParameters);
@@ -454,7 +454,7 @@ StackType_t *pxPortInitialiseStack(StackType_t *pxTopOfStack, TaskFunction_t pxC
     HIGH ADDRESS
     |---------------------------| <- pxTopOfStack on entry
     | TLS Variables             |
-    | ------------------------- | <- Start of useable stack
+    | ------------------------- | <- Start of usable stack
     | Starting stack frame      |
     | ------------------------- | <- pxTopOfStack on return (which is the tasks current SP)
     |             |             |
@@ -481,7 +481,6 @@ StackType_t *pxPortInitialiseStack(StackType_t *pxTopOfStack, TaskFunction_t pxC
 
     // Return the task's current stack pointer address which should point to the starting interrupt stack frame
     return (StackType_t *)uxStackPointer;
-    //TODO: IDF-2393
 }
 
 // ------------------- Hook Functions ----------------------
@@ -509,21 +508,21 @@ void vApplicationTickHook( void )
 #endif
 
 extern void esp_vApplicationIdleHook(void);
-#if CONFIG_FREERTOS_USE_MINIMAL_IDLE_HOOK
+#if CONFIG_FREERTOS_USE_PASSIVE_IDLE_HOOK
 /*
-By default, the port uses vApplicationMinimalIdleHook() to run IDF style idle
-hooks. However, users may also want to provide their own vApplicationMinimalIdleHook().
-In this case, we use to -Wl,--wrap option to wrap the user provided vApplicationMinimalIdleHook()
+By default, the port uses vApplicationPassiveIdleHook() to run IDF style idle
+hooks. However, users may also want to provide their own vApplicationPassiveIdleHook().
+In this case, we use to -Wl,--wrap option to wrap the user provided vApplicationPassiveIdleHook()
 */
-extern void __real_vApplicationMinimalIdleHook( void );
-void __wrap_vApplicationMinimalIdleHook( void )
+extern void __real_vApplicationPassiveIdleHook( void );
+void __wrap_vApplicationPassiveIdleHook( void )
 {
     esp_vApplicationIdleHook(); //Run IDF style hooks
-    __real_vApplicationMinimalIdleHook(); //Call the user provided vApplicationMinimalIdleHook()
+    __real_vApplicationPassiveIdleHook(); //Call the user provided vApplicationPassiveIdleHook()
 }
-#else // CONFIG_FREERTOS_USE_MINIMAL_IDLE_HOOK
-void vApplicationMinimalIdleHook( void )
+#else // CONFIG_FREERTOS_USE_PASSIVE_IDLE_HOOK
+void vApplicationPassiveIdleHook( void )
 {
     esp_vApplicationIdleHook(); //Run IDF style hooks
 }
-#endif // CONFIG_FREERTOS_USE_MINIMAL_IDLE_HOOK
+#endif // CONFIG_FREERTOS_USE_PASSIVE_IDLE_HOOK

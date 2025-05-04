@@ -3,11 +3,11 @@
 
 :link_to_translation:`en:[English]`
 
-{IDF_TARGET_STATIC_MEANS_HEAP:default="Wi-Fi 库和蓝牙控制器", esp32s2="Wi-Fi 库", esp32c6="Wi-Fi 库、蓝牙控制器和 IEEE 802.15.4 库", esp32h2="蓝牙控制器，IEEE 802.15.4 库"}
+{IDF_TARGET_STATIC_MEANS_HEAP:default="Wi-Fi 库和蓝牙控制器", esp32s2="Wi-Fi 库", esp32c6="Wi-Fi 库、蓝牙控制器和 IEEE 802.15.4 库", esp32c61="Wi-Fi 库和蓝牙控制器", esp32h2="蓝牙控制器和 IEEE 802.15.4 库", esp32h21="蓝牙控制器和 IEEE 802.15.4 库", esp32h4="蓝牙控制器和 IEEE 802.15.4 库"}
 
 固件应用程序的可用 RAM 在某些情况下可能处于低水平，甚至完全耗尽。为此，应调整这些情况下固件应用程序的内存使用情况。
 
-固件应用程序通常需要为内部 RAM 保留备用空间，用于应对非常规情况，或在后续版本的更新中，适应 RAM 使用需求的变化。
+固件通常需要为内部 RAM 保留备用空间，用于应对非常规情况，或在后续版本的更新中，适应 RAM 使用需求的变化。
 
 背景
 ----------
@@ -45,38 +45,70 @@ ESP-IDF 包含一系列堆 API，可以在运行时测量空闲堆内存，请�
 
 .. _optimize-stack-sizes:
 
-栈内存大小优化
+确定栈内存大小
 --------------------
 
 在 FreeRTOS 操作系统中，任务栈通常从堆中分配。每个任务的栈大小固定，且会作为参数传递给 :cpp:func:`xTaskCreate`。每个任务可用的栈内存不得超过为其分配的栈内存大小，否则将导致栈内存溢出或堆内存损坏，使原本可用的程序崩溃。
 
 因此，确定每个任务栈内存的最佳大小、最小化每个任务栈内存大小、以及最小化任务栈内存的整体数量，都可以大幅减少 RAM 的使用。
 
-要确定特定任务栈内存的最佳大小，请执行以下操作：
+栈溢出检测的配置选项
+^^^^^^^^^^^^^^^^^^^^
 
-- 程序运行时，如你认为某任务有未使用的栈内存，可通过其任务句柄调用 :cpp:func:`uxTaskGetStackHighWaterMark`。该函数将以字节为单位，返回任务中生命周期最短的空闲栈内存。
+.. only:: SOC_ASSIST_DEBUG_SUPPORTED
+
+   硬件栈保护
+   ~~~~~~~~~~~~
+
+   硬件栈保护是一种检测栈溢出的可靠方法，通过硬件的辅助调试模块来监视 CPU 的栈指针寄存器。如果栈指针寄存器超出了当前栈的边界，则立即触发紧急情况提示（更多详细信息，请参阅 :ref:`Hardware-Stack-Guard`）。可以通过 :ref:`CONFIG_ESP_SYSTEM_HW_STACK_GUARD` 选项启用硬件栈保护。
+
+栈末尾监视点
+~~~~~~~~~~~~~~
+
+栈末尾监视点将 CPU 监视点放置在当前栈的末尾。如果该字被覆盖（例如栈溢出），则会立即触发紧急情况提示。在未使用调试器的监视点时，可以设置 :ref:`CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK` 选项，启用栈末尾监视点功能。
+
+栈 canary 字节
+~~~~~~~~~~~~~~~~~
+
+栈 canary 字节功能在每个任务的栈末尾添加一组魔术字节，并在每次上下文切换时检查这些字节是否已更改。如果这些魔术字节被覆盖，则会触发紧急情况提示。可以通过 :ref:`CONFIG_FREERTOS_CHECK_STACKOVERFLOW` 选项启用栈 canary 字节功能。
+
+.. note::
+
+   使用栈末尾监视点或栈 canary 字节时，栈指针可能在栈溢出时跳过监视点或 canary 字节，损坏 RAM 的其他区域。因此，上述方法并不能检测所有的栈溢出。
+
+   .. only:: SOC_ASSIST_DEBUG_SUPPORTED
+
+      推荐启用默认选项 :ref:`CONFIG_ESP_SYSTEM_HW_STACK_GUARD`，避免这个缺点。
+
+任务运行时确定栈内存大小的方法
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- 调用 :cpp:func:`uxTaskGetStackHighWaterMark` 会返回任务整个生命周期中空闲栈内存的最小值，从而较好地显示出任务未使用的栈内存量。
 
   - 从任务本身内部调用 :cpp:func:`uxTaskGetStackHighWaterMark` 是调用该函数最容易的方式：在任务达到其栈内存使用峰值后，调用 ``uxTaskGetStackHighWaterMark(NULL)`` 获取当前任务的高水位标记，换言之，如果有主循环，请多次执行主循环来覆盖各种状态，随后调用 :cpp:func:`uxTaskGetStackHighWaterMark`。
   - 通常可以用任务的栈内存总大小减去调用 :cpp:func:`uxTaskGetStackHighWaterMark` 的返回值，计算任务实际使用的栈内存大小，但应留出一定的安全余量，应对运行时栈内存使用量的小幅意外增长。
 
-- 程序运行时，调用 :cpp:func:`uxTaskGetSystemState` 获取系统中所有任务的摘要，包括各栈内存的高水位标记值。
-- 在未使用调试器的监视点时，可以设置 :ref:`CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK` 选项。启用此选项时，系统会使用一个观察点，监视每个任务栈的最后一个字节。如果有新的数据覆盖了该字节（例如发生栈溢出），将立即触发 panic。相比默认 :ref:`CONFIG_FREERTOS_CHECK_STACKOVERFLOW` 选项的 ``Check using canary bytes``，这种方式更可靠，因其能够立即触发 panic，而不是在下一次 RTOS 上下文切换时触发。然而，两种选项都存在缺点，有时栈指针可能会跳过监视点或 canary 字节，损坏 RAM 的其他区域。
+- 调用 :cpp:func:`uxTaskGetSystemState` 来获取系统中所有任务的摘要，包括各栈内存的高水位标记值。
 
-要减少特定任务栈内存大小，请执行以下操作：
+
+减少栈内存大小
+--------------
 
 - 避免占用过多栈内存的函数。字符串格式化函数（如 ``printf()``）会使用大量栈内存，如果任务不调用这类函数，通常可以减小其占用的栈内存。
 
+  - 使用实验性的选项 :ref:`picolibc-instead-of-newlib` 可以显著减少 ``printf()`` 调用的堆栈使用量。
   - 启用 :ref:`newlib-nano-formatting`，可以在任务调用 ``printf()`` 或其他 C 语言字符串格式化函数时，减少这类任务的栈内存使用量。
 
 - 避免在栈上分配大型变量。在 C 语言声明的默认作用域中，任何分配为自动变量的大型结构体或数组都会占用栈内存。要优化这些变量占用的栈内存大小，可以使用静态分配，或仅在需要时从堆中动态分配。
 - 避免调用深度递归函数。尽管调用单个递归函数并不一定会占用大量栈内存，但若每个函数都包含大量基于栈的变量，那么调用这些函数的开销将会很高。
 
-要减少任务的整体数量，请执行以下操作：
+减少任务数量
+^^^^^^^^^^^^
 
-- 合并任务。如果从未创建某个特定任务，就不会分配该任务的栈内存，从而极大减少 RAM 使用。如果某些任务可以与另一个任务合并，通常可以将不必要的任务删除。在应用程序中，如果满足以下条件，通常可以合并或删除任务：
+合并任务。如果从未创建某个特定任务，就不会分配该任务的栈内存，从而极大减少 RAM 使用。如果某些任务可以与另一个任务合并，通常可以将不必要的任务删除。在应用程序中，如果满足以下条件，通常可以合并或删除任务：
 
-   - 任务所执行的内容可以按顺序分解为多个函数调用。
-   - 任务所执行的内容可以分解为较小的工作，这些工作可以通过 FreeRTOS 队列或类似机制串行化，并由工作任务执行。
+- 任务所执行的内容可以按顺序分解为多个函数调用。
+- 任务所执行的内容可以分解为较小的工作，这些工作可以通过 FreeRTOS 队列或类似机制串行化，并由工作任务执行。
 
 内部任务栈内存大小
 ^^^^^^^^^^^^^^^^^^^^
@@ -155,21 +187,22 @@ IRAM 优化
     :esp32: - 禁用 :ref:`CONFIG_SPI_FLASH_ROM_DRIVER_PATCH` 选项可以释放一些 IRAM，但仅适用于某些 flash 配置，详情请参阅配置项帮助文档。
     :esp32: - 如果应用程序基于 ESP32 rev. 3 (ECO3)，且使用 PSRAM，设置 :ref:`CONFIG_ESP32_REV_MIN` 为 ``3``，可以禁用 PSRAM 的错误处理程序，节省 10 KB 乃至更多的 IRAM。
     - 禁用 :ref:`CONFIG_ESP_EVENT_POST_FROM_IRAM_ISR` 可以防止从 :ref:`iram-safe-interrupt-handlers` 中发布 ``esp_event`` 事件，节省 IRAM 空间。
-    - 禁用 :ref:`CONFIG_SPI_MASTER_ISR_IN_IRAM` 可以防止在写入 flash 时发生 spi_master 中断，节省 IRAM 空间，但可能影响 spi_master 的性能。
-    - 禁用 :ref:`CONFIG_SPI_SLAVE_ISR_IN_IRAM` 可以防止在写入 flash 时发生 spi_slave 中断，节省 IRAM 空间。
+    :SOC_GPSPI_SUPPORTED: - 禁用 :ref:`CONFIG_SPI_MASTER_ISR_IN_IRAM` 可以防止在写入 flash 时发生 spi_master 中断，节省 IRAM 空间，但可能影响 spi_master 的性能。
+    :SOC_GPSPI_SUPPORTED: - 禁用 :ref:`CONFIG_SPI_SLAVE_ISR_IN_IRAM` 可以防止在写入 flash 时发生 spi_slave 中断，节省 IRAM 空间。
     - 设置 :ref:`CONFIG_HAL_DEFAULT_ASSERTION_LEVEL` 为禁用 HAL 组件的断言，可以节省 IRAM 空间，对于经常调用 ``HAL_ASSERT`` 且位于 IRAM 中的 HAL 代码尤为如此。
     - 要禁用不需要的 flash 驱动程序，节省 IRAM 空间，请参阅 sdkconfig 菜单中的 ``Auto-detect Flash chips`` 选项。
-    - 启用 :ref:`CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH`。只要未启用 :ref:`CONFIG_SPI_MASTER_ISR_IN_IRAM` 选项，且没有从 ISR 中错误地调用堆函数，就可以在所有配置中安全启用此选项。
+    :SOC_GPSPI_SUPPORTED: - 启用 :ref:`CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH`。只要未启用 :ref:`CONFIG_SPI_MASTER_ISR_IN_IRAM` 选项，且没有从 ISR 中错误地调用堆函数，就可以在所有配置中安全启用此选项。
     :esp32c2: - 启用 :ref:`CONFIG_BT_RELEASE_IRAM`。 蓝牙所使用的 data，bss 和 text 段已经被分配在连续的RAM区间。当调用 ``esp_bt_mem_release`` 时，这些段都会被添加到 Heap 中。 这将节省约 22 KB 的 RAM。但要再次使用蓝牙功能，需要重启程序。
+    - 禁用 :ref:`CONFIG_LIBC_LOCKS_PLACE_IN_IRAM`。若在缓存禁用的情况下，运行中的中断服务程序（即 IRAM ISR）没有使用 libc 锁 API，那么禁用该配置可以节省 IRAM 空间。
 
 .. only:: esp32
 
    将 SRAM1 用于 IRAM
    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-   SRAM1 内存区域通常用于 DRAM 存储，但可以设置 :ref:`CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM` 选项，将其中一部分用作 IRAM 存储。引入该选项前，这个内存区域通常预留给 DRAM 数据使用（如 ``.bss`` ），随后由软件引导加载程序加入到堆中。引入该选项后，引导加载程序的 DRAM 大小会减少到更接近实际需要的值。
+   SRAM1 内存区域通常用于 DRAM 存储，但可以设置 :ref:`CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM` 选项，将其中一部分用作 IRAM 存储。引入该选项前，这个内存区域通常预留给 DRAM 数据使用（如 ``.bss``），随后由二级引导加载程序加入到堆中。引入该选项后，二级引导加载程序的 DRAM 大小会减少到更接近实际需要的值。
 
-   要使用以上选项，ESP-IDF 应能够将新的 SRAM1 区域识别为有效镜像段的加载地址。部分应用程序的代码置于新扩展的 IRAM 区域，如果软件引导加载程序在引入该选项前编译，将无法加载这类应用程序。这类情况通常在进行 OTA 更新时发生，此时仅会更新应用程序。
+   要使用以上选项，ESP-IDF 应能够将新的 SRAM1 区域识别为有效镜像段的加载地址。部分应用程序的代码置于新扩展的 IRAM 区域，如果二级引导加载程序在引入该选项前编译，将无法加载这类应用程序。这类情况通常在进行 OTA 更新时发生，此时仅会更新应用程序。
 
    如果 IRAM 段放置在无效区域，在启动过程中将检测到以下问题，并导致启动失败：
 
@@ -179,11 +212,12 @@ IRAM 优化
 
    .. warning::
 
-      若与在引入以上配置选项前编译的软件引导加载程序一同使用，使用 :ref:`CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM` 选项编译的应用程序很可能无法启动。若使用旧版本的引导加载程序，并进行 OTA 更新，请在提交任何更新前仔细测试。
+      若与在引入以上配置选项前编译的二级引导加载程序一同使用，使用 :ref:`CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM` 选项编译的应用程序很可能无法启动。若使用旧版本的引导加载程序，并进行 OTA 更新，请在提交任何更新前仔细测试。
 
    任何最终未用于静态 IRAM 的内存都将添加到堆内存中。
 
-.. only:: esp32c3
+
+.. only:: SOC_SPI_MEM_SUPPORT_AUTO_SUSPEND
 
     flash 暂停特性
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -198,6 +232,8 @@ IRAM 优化
     在中断上下文中使用用户 ISR 回调及其相关变量时，也必须将其放置在内部 RAM 中。
 
     将额外代码放置到 IRAM 中，将增加 IRAM 使用量，ESP-IDF 提供了 :ref:`CONFIG_SPI_FLASH_AUTO_SUSPEND` 选项，可以缓解 IRAM 的使用。通过启用此功能，使用 SPI flash API 和基于 SPI flash API 的 API 时，不会导致缓存禁用，因此 flash 中的代码和数据仍可正常执行或访问，但会有些延迟。有关此功能的详细信息，请参阅 :ref:`auto-suspend`。
+
+    启用 :ref:`CONFIG_SPI_FLASH_AUTO_SUSPEND` 后，可以减少 flash 驱动的 IRAM 使用。更多详细信息请参阅 :ref:`internal_memory_saving_for_flash_driver`。
 
     有关 flash 暂停特性的使用及其相应的响应时间延迟，请参阅 :example:`system/flash_suspend`。
 
@@ -233,3 +269,19 @@ IRAM 优化
 .. note::
 
     部分配置选项可以将一些功能移动到 IRAM 中，从而提高性能，但这类选项默认不进行配置，因此未在此列出。了解启用上述选项对 IRAM 大小造成的影响，请参阅配置项的帮助文本。
+
+
+.. only:: esp32s2 or esp32s3 or esp32p4
+
+   改变 cache 大小
+   ^^^^^^^^^^^^^^^^^
+
+   {IDF_TARGET_NAME} RAM 内存可用大小取决于 cache 的大小。在下面列出的 Kconfig 选项中减少 cache 大小将会增加可用的 RAM。
+
+   .. list::
+
+      :esp32s2: - :ref:`CONFIG_ESP32S2_INSTRUCTION_CACHE_SIZE`
+      :esp32s2: - :ref:`CONFIG_ESP32S2_DATA_CACHE_SIZE`
+      :esp32s3: - :ref:`CONFIG_ESP32S3_INSTRUCTION_CACHE_SIZE`
+      :esp32s3: - :ref:`CONFIG_ESP32S3_DATA_CACHE_SIZE`
+      :esp32p4: - :ref:`CONFIG_CACHE_L2_CACHE_SIZE`

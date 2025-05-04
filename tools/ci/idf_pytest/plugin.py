@@ -1,9 +1,13 @@
-# SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
+import importlib
+import logging
 import os
+import sys
 import typing as t
 from collections import defaultdict
 from functools import cached_property
+from unittest.mock import MagicMock
 from xml.etree import ElementTree as ET
 
 import pytest
@@ -30,6 +34,7 @@ from .constants import SUPPORTED_TARGETS
 from .utils import comma_sep_str_to_list
 from .utils import format_case_id
 from .utils import merge_junit_files
+from .utils import normalize_testcase_file_path
 
 IDF_PYTEST_EMBEDDED_KEY = pytest.StashKey['IdfPytestEmbedded']()
 ITEM_FAILED_CASES_KEY = pytest.StashKey[list]()
@@ -48,6 +53,7 @@ class IdfPytestEmbedded:
         self,
         target: t.Union[t.List[str], str],
         *,
+        config_name: t.Optional[str] = None,
         single_target_duplicate_mode: bool = False,
         apps: t.Optional[t.List[App]] = None,
     ):
@@ -59,6 +65,8 @@ class IdfPytestEmbedded:
 
         if not self.target:
             raise ValueError('`target` should not be empty')
+
+        self.config_name = config_name
 
         # these are useful while gathering all the multi-dut test cases
         # when this mode is activated,
@@ -75,7 +83,7 @@ class IdfPytestEmbedded:
 
         self.apps_list = (
             [os.path.join(idf_relpath(app.app_dir), app.build_dir) for app in apps if app.build_status == BuildStatus.SUCCESS]
-            if apps
+            if apps is not None
             else None
         )
 
@@ -104,7 +112,7 @@ class IdfPytestEmbedded:
 
         return item.callspec.params.get(key, default) or default
 
-    def item_to_pytest_case(self, item: Function) -> PytestCase:
+    def item_to_pytest_case(self, item: Function) -> t.Optional[PytestCase]:
         """
         Turn pytest item to PytestCase
         """
@@ -113,11 +121,56 @@ class IdfPytestEmbedded:
         # default app_path is where the test script locates
         app_paths = to_list(parse_multi_dut_args(count, self.get_param(item, 'app_path', os.path.dirname(item.path))))
         configs = to_list(parse_multi_dut_args(count, self.get_param(item, 'config', DEFAULT_SDKCONFIG)))
-        targets = to_list(parse_multi_dut_args(count, self.get_param(item, 'target', self.target[0])))
+        targets = to_list(parse_multi_dut_args(count, self.get_param(item, 'target')))
+
+        multi_dut_without_param = False
+        if count > 1 and targets == [None] * count:
+            multi_dut_without_param = True
+            try:
+                targets = to_list(parse_multi_dut_args(count, '|'.join(self.target)))  # check later while collecting
+            except ValueError:  # count doesn't match
+                return None
+
+        elif targets is None:
+            targets = self.target
 
         return PytestCase(
-            [PytestApp(app_paths[i], targets[i], configs[i]) for i in range(count)], item
+            apps=[PytestApp(app_paths[i], targets[i], configs[i]) for i in range(count)],
+            item=item,
+            multi_dut_without_param=multi_dut_without_param
         )
+
+    def pytest_collectstart(self) -> None:
+        # mock the optional packages while collecting locally
+        if not os.getenv('CI_JOB_ID') or os.getenv('PYTEST_IGNORE_COLLECT_IMPORT_ERROR') == '1':
+            # optional packages required by test scripts
+            for p in [
+                'scapy',
+                'scapy.all',
+                'websocket',  # websocket-client
+                'netifaces',
+                'RangeHTTPServer',  # rangehttpserver
+                'dbus',  # dbus-python
+                'dbus.mainloop',
+                'dbus.mainloop.glib',
+                'google.protobuf',  # protobuf
+                'google.protobuf.internal',
+                'bleak',
+                'paho',  # paho-mqtt
+                'paho.mqtt',
+                'paho.mqtt.client',
+                'paramiko',
+                'netmiko',
+                'pyecharts',
+                'pyecharts.options',
+                'pyecharts.charts',
+                'can',  # python-can
+            ]:
+                try:
+                    importlib.import_module(p)
+                except ImportError:
+                    logging.warning(f'Optional package {p} is not installed, mocking it while collecting...')
+                    sys.modules[p] = MagicMock()
 
     @pytest.hookimpl(tryfirst=True)
     def pytest_collection_modifyitems(self, items: t.List[Function]) -> None:
@@ -167,7 +220,11 @@ class IdfPytestEmbedded:
         # 2. Add markers according to special markers
         item_to_case_dict: t.Dict[Function, PytestCase] = {}
         for item in items:
-            item.stash[ITEM_PYTEST_CASE_KEY] = item_to_case_dict[item] = self.item_to_pytest_case(item)
+            case = self.item_to_pytest_case(item)
+            if case is None:
+                continue
+
+            item.stash[ITEM_PYTEST_CASE_KEY] = item_to_case_dict[item] = case
             if 'supported_targets' in item.keywords:
                 for _target in SUPPORTED_TARGETS:
                     item.add_marker(_target)
@@ -177,6 +234,13 @@ class IdfPytestEmbedded:
             if 'all_targets' in item.keywords:
                 for _target in [*SUPPORTED_TARGETS, *PREVIEW_TARGETS]:
                     item.add_marker(_target)
+
+            # add single-dut "target" as param
+            _item_target_param = self.get_param(item, 'target', None)
+            if case.is_single_dut_test_case and _item_target_param and _item_target_param not in case.all_markers:
+                item.add_marker(_item_target_param)
+
+        items[:] = [_item for _item in items if _item in item_to_case_dict]
 
         # 3.1. CollectMode.SINGLE_SPECIFIC, like `pytest --target esp32`
         if self.collect_mode == CollectMode.SINGLE_SPECIFIC:
@@ -201,14 +265,30 @@ class IdfPytestEmbedded:
 
         # 3.3. CollectMode.MULTI_ALL_WITH_PARAM, intended to be used by `get_pytest_cases`
         else:
-            items[:] = [
-                _item
-                for _item in items
-                if not item_to_case_dict[_item].is_single_dut_test_case
-                and self.get_param(_item, 'target', None) is not None
-            ]
+            filtered_items = []
+            for item in items:
+                case = item_to_case_dict[item]
+                target = self.get_param(item, 'target', None)
+                if (
+                    not case.is_single_dut_test_case and
+                    target is not None and
+                    target not in case.skip_targets
+                ):
+                    filtered_items.append(item)
+            items[:] = filtered_items
 
-        # 4. filter by `self.apps_list`, skip the test case if not listed
+        # 4. filter according to the sdkconfig, if there's param 'config' defined
+        if self.config_name:
+            _items = []
+            for item in items:
+                case = item_to_case_dict[item]
+                if self.config_name not in set(app.config or DEFAULT_SDKCONFIG for app in case.apps):
+                    self.additional_info[case.name]['skip_reason'] = f'Only run with sdkconfig {self.config_name}'
+                else:
+                    _items.append(item)
+            items[:] = _items
+
+        # 5. filter by `self.apps_list`, skip the test case if not listed
         #   should only be used in CI
         _items = []
         for item in items:
@@ -291,16 +371,19 @@ class IdfPytestEmbedded:
         is_qemu = item.get_closest_marker('qemu') is not None
         target = item.funcargs['target']
         config = item.funcargs['config']
+        app_path = item.funcargs.get('app_path')
         for junit in junits:
             xml = ET.parse(junit)
             testcases = xml.findall('.//testcase')
             for case in testcases:
                 # modify the junit files
+                # Use from case attrib if available, otherwise fallback to the previously defined
+                app_path = case.attrib.get('app_path') or app_path
                 new_case_name = format_case_id(target, config, case.attrib['name'], is_qemu=is_qemu)
                 case.attrib['name'] = new_case_name
                 if 'file' in case.attrib:
-                    case.attrib['file'] = case.attrib['file'].replace('/IDF/', '')  # our unity test framework
-
+                    # our unity test framework
+                    case.attrib['file'] = normalize_testcase_file_path(case.attrib['file'], app_path)
                 if ci_job_url := os.getenv('CI_JOB_URL'):
                     case.attrib['ci_job_url'] = ci_job_url
 

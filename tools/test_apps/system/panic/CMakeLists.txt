@@ -17,7 +17,7 @@ if(CONFIG_TEST_MEMPROT)
     endif()
 endif()
 
-if(NOT CONFIG_TEST_MEMPROT)
+if(NOT CONFIG_TEST_MEMPROT AND NOT CONFIG_ESP_COREDUMP_CAPTURE_DRAM)
     # Enable UBSAN checks
     #
     # shift-base sanitizer is disabled due to the following pattern found in register header files:
@@ -36,12 +36,14 @@ if(NOT CONFIG_TEST_MEMPROT)
         esp_common esp_hw_support soc hal freertos)
     if(CONFIG_ESP_COREDUMP_CHECKSUM_SHA256)
         if(CONFIG_IDF_TARGET_ESP32S2)
-            # due to the ram limitation, coredump is removed from esp32s2 built
-            list(REMOVE_ITEM ubsan_components espcoredump)
+            # due to the ram limitation, coredump and freertos are removed from esp32s2 built
+            list(REMOVE_ITEM ubsan_components espcoredump freertos)
         endif()
     endif()
     foreach(component  IN LISTS ubsan_components)
         idf_component_get_property(lib ${component} COMPONENT_LIB)
         target_compile_options(${lib} PRIVATE ${ubsan_options})
     endforeach()
+
+    target_link_libraries(${project_elf} PRIVATE "-Wl,--wrap=esp_panic_handler")
 endif()

@@ -3,7 +3,7 @@ Analog to Digital Converter (ADC) Continuous Mode Driver
 
 :link_to_translation:`zh_CN:[中文]`
 
-{IDF_TARGET_ADC_NUM:default="two", esp32c2="one", esp32c6="one", esp32h2="one"}
+{IDF_TARGET_ADC_NUM:default="two", esp32c2="one", esp32c6="one", esp32h2="one", esp32c5="one", esp32c61="one"}
 
 Introduction
 ------------
@@ -54,11 +54,11 @@ The ADC continuous mode driver is implemented based on {IDF_TARGET_NAME} SAR ADC
 
 To create an ADC continuous mode driver handle, set up the required configuration structure :cpp:type:`adc_continuous_handle_cfg_t`:
 
-- :cpp:member:`adc_continuous_handle_cfg_t::max_store_buf_size`: set the maximum size of the pool in bytes, and the driver saves ADC conversion result into the pool. If this pool is full, new conversion results will be lost.
+- :cpp:member:`adc_continuous_handle_cfg_t::max_store_buf_size`: set the maximum size of the pool in bytes, and the driver saves ADC conversion result into the pool.
 - :cpp:member:`adc_continuous_handle_cfg_t::conv_frame_size`: set the size of the ADC conversion frame, in bytes.
 - :cpp:member:`adc_continuous_handle_cfg_t::flags`: set the flags that can change the driver's behavior.
 
-  - ``flush_pool``: auto flush the pool when it's full.
+  - ``flush_pool``: When the pool is full, the old data in the buffer pool will be automatically flushed and new data will be written. Otherwise, when the pool is full, new conversion results will be lost.
 
 
 After setting up the above configurations for the ADC, call :cpp:func:`adc_continuous_new_handle` with the prepared :cpp:type:`adc_continuous_handle_cfg_t`. This function may fail due to various errors such as invalid arguments, insufficient memory, etc.
@@ -117,7 +117,7 @@ If the ADC continuous mode driver is no longer used, you should deinitialize the
 
     - :cpp:func:`adc_continuous_monitor_enable`: Enable a monitor.
     - :cpp:func:`adc_continuous_monitor_disable`: Disable a monitor.
-    - :cpp:func:`adc_monitor_register_callbacks`: register user callbacks to take action when the ADC value exceeds of the threshold.
+    - :cpp:func:`adc_continuous_monitor_register_event_callbacks`: register user callbacks to take action when the ADC value exceeds of the thresholds.
     - :cpp:func:`adc_del_continuous_monitor`: Delete a created monitor and free resources.
 
     .. only:: esp32s2
@@ -129,16 +129,52 @@ If the ADC continuous mode driver is no longer used, you should deinitialize the
             2. Only one monitor is supported for one ADC unit.
             3. All enabled channel(s) of a certain ADC unit in ADC continuous mode driver will be monitored. The :cpp:member:`adc_monitor_config_t::channel` parameter will not be used.
 
+    Specifically, the monitor function can be used to implement zero-crossing detection. As ADC cannot directly process negative input signals, an extra **DC bias** should be applied to the original signal before measurement.
+
+    First, add a DC bias to the input signal through a circuit to "shift" the negative signal into the ADC's measurement range. For the measurement range, please refer to the On-Chip Sensor and Analog Signal Processing chapter in `TRM <{IDF_TARGET_TRM_EN_URL}>`__. For example, adding a 1 V bias would transform a signal from -1 V to +1 V into 0 V to 2 V range. Then by setting the appropriate high and low thresholds, the ADC can detect if the input signal approaches zero, allowing for the identification of phase changes in the signal. Refer to the example code below for details.
+
+    .. code:: c
+
+        // Initialize the ADC monitor handle
+        adc_monitor_handle_t adc_monitor_handle = NULL;
+
+        // Configure the ADC monitor
+        adc_monitor_config_t zero_crossing_config = {
+            .adc_unit = EXAMPLE_ADC_UNIT_1,      // Specify the ADC unit to monitor
+            .channel = EXAMPLE_ADC_CHANNEL_0,    // Specify the ADC channel to monitor
+            .h_threshold = 1100,                 // Set the high threshold close to the DC bias and adjust it as needed
+            .l_threshold = 900,                 // Set the low threshold close to the DC bias and adjust it as needed
+        };
+
+        // Create the ADC monitor
+        ESP_ERROR_CHECK(adc_new_continuous_monitor(&zero_crossing_config, &adc_monitor_handle));
+
+        // Register the callback function
+        adc_monitor_evt_cbs_t zero_crossing_cbs = {
+            .on_over_high_thresh = example_on_exceed_high_thresh,
+            .on_below_low_thresh = example_on_below_low_thresh,
+        };
+
+        ESP_ERROR_CHECK(adc_continuous_monitor_register_event_callbacks(adc_monitor_handle, &zero_crossing_cbs, NULL));
+
+        // Enable the ADC monitor
+        ESP_ERROR_CHECK(adc_continuous_monitor_enable(adc_monitor_handle));
+
+        // Disable and delete the ADC monitor
+        ESP_ERROR_CHECK(adc_continuous_monitor_disable(adc_monitor_handle));
+        ESP_ERROR_CHECK(adc_del_continuous_monitor(adc_monitor_handle));
+
 Initialize the ADC Continuous Mode Driver
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code:: c
 
+    adc_continuous_handle_t handle = NULL;
     adc_continuous_handle_cfg_t adc_config = {
         .max_store_buf_size = 1024,
-        .conv_frame_size = 100,
+        .conv_frame_size = 256,
     };
-    ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config));
+    ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, &handle));
 
 
 Recycle the ADC Unit
@@ -146,7 +182,7 @@ Recycle the ADC Unit
 
 .. code:: c
 
-    ESP_ERROR_CHECK(adc_continuous_deinit());
+    ESP_ERROR_CHECK(adc_continuous_deinit(handle));
 
 
 .. _adc-continuous-adc-configurations:
@@ -200,11 +236,11 @@ On the contrary, calling :cpp:func:`adc_continuous_stop` stops the ADC conversio
 
 .. code::c
 
-    ESP_ERROR_CHECK(adc_continuous_start());
+    ESP_ERROR_CHECK(adc_continuous_start(handle));
 
 .. code:: c
 
-    ESP_ERROR_CHECK(adc_continuous_stop());
+    ESP_ERROR_CHECK(adc_continuous_stop(handle));
 
 
 .. _adc-continuous-register-event-callbacks:
@@ -253,7 +289,7 @@ After calling :cpp:func:`adc_continuous_start`, the ADC continuous conversion st
 Function :cpp:func:`adc_continuous_read` tries to read the expected length of conversion results each time.
 
 - When calling :cpp:func:`adc_continuous_read`, you can request to read a conversion result of the specified length. Sometimes, however, the actual available conversion results may be less than the requested length, in which case the function still moves the data from the internal pool into the buffer you provided. Therefore, to learn the number of conversion results actually moved into the buffer, please check the value of ``out_length``.
-- If there is no conversion result generated in the internal pool, the function will block for ``timeout_ms`` until the conversion results are generated. If there are still no generated results, the function will return :c:macro:`ESP_ERR_TIMEOUT`.
+- If there is no conversion result generated in the internal pool, the function will block for ``timeout_ms`` until at least one conversion result is generated. If there are still no generated results, the function will return :c:macro:`ESP_ERR_TIMEOUT`.
 - If the generated results fill up the internal pool, newly generated results will be lost. Next time when :cpp:func:`adc_continuous_read` is called, this function will return :c:macro:`ESP_ERR_INVALID_STATE` to indicate this situation.
 
 This API aims to give you a chance to read all the ADC continuous conversion results.
@@ -276,7 +312,7 @@ where:
     * - Dout
       - ADC raw digital reading result.
     * - Vmax
-      - Maximum measurable input analog voltage, this is related to the ADC attenuation, please refer to the On-Chip Sensor and Analog Signal Processing chapter in `TRM <{IDF_TARGET_TRM_EN_URL}>`__.
+      - Maximum measurable input analog voltage, this is related to the ADC attenuation, please refer to the On-Chip Sensor and Analog Signal Processing chapter in `TRM <{IDF_TARGET_TRM_EN_URL}#sensor>`__.
     * - Dmax
       - Maximum of the output ADC raw digital reading result, which is 2^bitwidth, where the bitwidth is the :cpp:member:`adc_digi_pattern_config_t::bit_width` configured before.
 
@@ -289,39 +325,19 @@ To do further calibration to convert the ADC raw result to voltage in mV, please
 Hardware Limitations
 ^^^^^^^^^^^^^^^^^^^^
 
-- A specific ADC unit can only work under one operating mode at any one time, either continuous mode or one-shot mode. :cpp:func:`adc_continuous_start` has provided the protection.
+.. list::
 
-- Random Number Generator (RNG) uses ADC as an input source. When ADC continuous mode driver works, the random number generated from RNG will be less random.
+    - A specific ADC unit can only work under one operating mode at any one time, either continuous mode or one-shot mode. :cpp:func:`adc_continuous_start` has provided the protection.
+    - Random Number Generator (RNG) uses ADC as an input source. When ADC continuous mode driver works, the random number generated from RNG will be less random.
+    :esp32 or esp32s2: - ADC2 is also used by Wi-Fi. :cpp:func:`adc_continuous_start` has provided the protection between Wi-Fi driver and ADC continuous mode driver.
+    :esp32: - ADC continuous mode driver uses I2S0 peripheral as hardware DMA FIFO. Therefore, if I2S0 is in use already, the :cpp:func:`adc_continuous_new_handle` will return :c:macro:`ESP_ERR_NOT_FOUND`.
+    :esp32: - ESP32 DevKitC: GPIO 0 cannot be used due to external auto program circuits.
+    :esp32: - ESP-WROVER-KIT: GPIO 0, 2, 4, and 15 cannot be used due to external connections for different purposes.
+    :esp32s2: - ADC continuous mode driver uses SPI3 peripheral as hardware DMA FIFO. Therefore, if SPI3 is in use already, the :cpp:func:`adc_continuous_new_handle` will return :c:macro:`ESP_ERR_NOT_FOUND`.
+    :esp32c3: - ADC2 DMA functionality is no longer supported to retrieve ADC conversion results due to hardware limitations, as unstable results have been observed. This issue can be found in `ESP32C3 Errata <https://www.espressif.com/sites/default/files/documentation/esp32-c3_errata_en.pdf>`_. For compatibility, you can enable :ref:`CONFIG_ADC_CONTINUOUS_FORCE_USE_ADC2_ON_C3_S3` to force use ADC2.
+    :esp32s3: - ADC2 DMA functionality is no longer supported to retrieve ADC conversion results due to hardware limitations, as unstable results have been observed. This issue can be found in `ESP32S3 Errata <https://www.espressif.com/sites/default/files/documentation/esp32-s3_errata_en.pdf>`_. For compatibility, you can enable :ref:`CONFIG_ADC_CONTINUOUS_FORCE_USE_ADC2_ON_C3_S3` to force use ADC2.
 
-.. only:: esp32 or esp32s2
-
-    - ADC2 is also used by Wi-Fi. :cpp:func:`adc_continuous_start` has provided the protection between Wi-Fi driver and ADC continuous mode driver.
-
-.. only:: esp32
-
-    - ADC continuous mode driver uses I2S0 peripheral as hardware DMA FIFO. Therefore, if I2S0 is in use already, the :cpp:func:`adc_continuous_new_handle` will return :c:macro:`ESP_ERR_NOT_FOUND`.
-
-    - ESP32 DevKitC: GPIO 0 cannot be used due to external auto program circuits.
-
-    - ESP-WROVER-KIT: GPIO 0, 2, 4, and 15 cannot be used due to external connections for different purposes.
-
-.. only:: esp32s2
-
-    - ADC continuous mode driver uses SPI3 peripheral as hardware DMA FIFO. Therefore, if SPI3 is in use already, the :cpp:func:`adc_continuous_new_handle` will return :c:macro:`ESP_ERR_NOT_FOUND`.
-
-.. only:: esp32c3
-
-    - ADC2 DMA functionality is no longer supported to retrieve ADC conversion results due to hardware limitations, as unstable results have been observed. This issue can be found in `ESP32C3 Errata <https://www.espressif.com/sites/default/files/documentation/esp32-c3_errata_en.pdf>`_. For compatibility, you can enable :ref:`CONFIG_ADC_CONTINUOUS_FORCE_USE_ADC2_ON_C3_S3` to force use ADC2.
-
-.. only:: esp32s3
-
-    - ADC2 DMA functionality is no longer supported to retrieve ADC conversion results due to hardware limitations, as unstable results have been observed. This issue can be found in `ESP32S3 Errata <https://www.espressif.com/sites/default/files/documentation/esp32-s3_errata_en.pdf>`_. For compatibility, you can enable :ref:`CONFIG_ADC_CONTINUOUS_FORCE_USE_ADC2_ON_C3_S3` to force use ADC2.
-
-    .. _adc-continuous-power-management:
-
-.. only:: not esp32s3
-
-    .. _adc-continuous-power-management:
+.. _adc-continuous-power-management:
 
 Power Management
 ^^^^^^^^^^^^^^^^
@@ -350,7 +366,7 @@ ADC continuous mode driver APIs are not guaranteed to be thread-safe. However, t
 Application Examples
 --------------------
 
-* ADC continuous mode example: :example:`peripherals/adc/continuous_read`.
+* :example:`peripherals/adc/continuous_read` demonstrates how to use the ADC Continuous Read Mode (DMA Mode) on {IDF_TARGET_NAME} development boards to read from GPIO pins via on-chip ADC modules.
 
 
 API Reference

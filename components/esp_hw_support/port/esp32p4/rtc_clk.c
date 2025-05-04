@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -13,18 +13,23 @@
 #include "esp32p4/rom/rtc.h"
 #include "soc/rtc.h"
 #include "esp_private/rtc_clk.h"
+#include "esp_attr.h"
 #include "esp_hw_log.h"
 #include "esp_rom_sys.h"
 #include "hal/clk_tree_ll.h"
 #include "hal/regi2c_ctrl_ll.h"
 #include "hal/gpio_ll.h"
 #include "soc/io_mux_reg.h"
-#include "esp_private/sleep_event.h" // TODO: IDF-7528
+#include "esp_private/sleep_event.h"
+#include "esp_private/regi2c_ctrl.h"
 
 static const char *TAG = "rtc_clk";
 
 // CPLL frequency option, in 360/400MHz. Zero if CPLL is not enabled.
 static int s_cur_cpll_freq = 0;
+
+// MPLL frequency option, 400MHz. Zero if MPLL is not enabled.
+static TCM_DRAM_ATTR uint32_t s_cur_mpll_freq = 0;
 
 void rtc_clk_32k_enable(bool enable)
 {
@@ -137,7 +142,9 @@ static void rtc_clk_cpll_configure(soc_xtal_freq_t xtal_freq, int cpll_freq)
 {
     /* Digital part */
     clk_ll_cpll_set_freq_mhz(cpll_freq);
+
     /* Analog part */
+    ANALOG_CLOCK_ENABLE();
     /* CPLL CALIBRATION START */
     regi2c_ctrl_ll_cpll_calibration_start();
     clk_ll_cpll_set_config(cpll_freq, xtal_freq);
@@ -146,6 +153,7 @@ static void rtc_clk_cpll_configure(soc_xtal_freq_t xtal_freq, int cpll_freq)
     esp_rom_delay_us(10); // wait for true stop
     /* CPLL CALIBRATION STOP */
     regi2c_ctrl_ll_cpll_calibration_stop();
+    ANALOG_CLOCK_DISABLE();
 
     s_cur_cpll_freq = cpll_freq;
 }
@@ -201,15 +209,18 @@ static void rtc_clk_cpu_freq_to_8m(void)
  */
 static void rtc_clk_cpu_freq_to_cpll_mhz(int cpu_freq_mhz, hal_utils_clk_div_t *div)
 {
-    // CPLL -> CPU_CLK -> MEM_CLK -> SYS_CLK -> APB_CLK
-    // Constraint: MEM_CLK <= 200MHz, APB_CLK <= 100MHz
-    // This implies that when clock source is CPLL,
-    //                   If cpu_divider < 2, mem_divider must be larger or equal to 2
-    //                   If cpu_divider < 2, mem_divider = 2, sys_divider < 2, apb_divider must be larger or equal to 2
-    // Current available configurations:
-    // 360  -   360   -    180    -    180   -    90
-    // 360  -   180   -    180    -    180   -    90
-    // 360  -   90    -    90     -    90    -    90
+    /**
+     * Constraint: MEM_CLK <= 200MHz, APB_CLK <= 100MHz
+     * This implies that when clock source is CPLL,
+     *                   If cpu_divider < 2, mem_divider must be larger or equal to 2
+     *                   If cpu_divider < 2, mem_divider = 2, sys_divider < 2, apb_divider must be larger or equal to 2
+     *
+     * Current available configurations:
+     * CPLL    ->     CPU_CLK   ->     MEM_CLK   ->     SYS_CLK   ->     APB_CLK
+     * 360    div1      360    div2      180    div1      180    div2      90
+     * 360    div2      180    div1      180    div1      180    div2      90
+     * 360    div4      90     div1      90     div1      90     div1      90
+     */
     uint32_t mem_divider = 1;
     uint32_t sys_divider = 1; // We are not going to change this
     uint32_t apb_divider = 1;
@@ -233,18 +244,39 @@ static void rtc_clk_cpu_freq_to_cpll_mhz(int cpu_freq_mhz, hal_utils_clk_div_t *
         // To avoid such case, we will strictly do abort here.
         abort();
     }
-    // Update bit does not control CPU clock sel mux. Therefore, there may be a middle state during the switch (CPU rises)
-    // We will switch cpu clock source first, and then set the desired dividers.
-    // It is likely that the hardware will automatically adjust dividers to meet mem_clk, apb_clk freq constraints when
-    // cpu clock source is set.
-    // However, the desired dividers will be written into registers anyways afterwards.
-    // This ensures the final confguration is the desired one.
+
+    // If it's upscaling, the divider of MEM/SYS/APB needs to be increased, to avoid illegal intermediate states,
+    // the clock divider should be updated in the order from the APB_CLK to CPU_CLK.
+    // And if it's downscaling, the divider of MEM/SYS/APB needs to be decreased, the clock divider should be updated
+    // in the order from the CPU_CLK to APB_CLK.
+    // Otherwise, an intermediate state will occur, in the intermediate state, the frequency of APB/MEM does not meet
+    // the timing requirements. If there are periperals/CPU access that depend on these two clocks at this moment, some
+    // exception might occur.
+    if (cpu_freq_mhz >= esp_rom_get_cpu_ticks_per_us()) {
+        // Frequency Upscaling
+        clk_ll_apb_set_divider(apb_divider);
+        clk_ll_bus_update();
+        clk_ll_sys_set_divider(sys_divider);
+        clk_ll_bus_update();
+        clk_ll_mem_set_divider(mem_divider);
+        clk_ll_bus_update();
+        clk_ll_cpu_set_divider(div->integer, div->numerator, div->denominator);
+        clk_ll_bus_update();
+    } else {
+        // Frequency Downscaling
+        clk_ll_cpu_set_divider(div->integer, div->numerator, div->denominator);
+        clk_ll_bus_update();
+        clk_ll_mem_set_divider(mem_divider);
+        clk_ll_bus_update();
+        clk_ll_sys_set_divider(sys_divider);
+        clk_ll_bus_update();
+        clk_ll_apb_set_divider(apb_divider);
+        clk_ll_bus_update();
+    }
+
+    // Update bit does not control CPU clock sel mux, the clock source needs to be switched at
+    // last to avoid intermediate states.
     clk_ll_cpu_set_src(SOC_CPU_CLK_SRC_PLL);
-    clk_ll_cpu_set_divider(div->integer, div->numerator, div->denominator);
-    clk_ll_mem_set_divider(mem_divider);
-    clk_ll_sys_set_divider(sys_divider);
-    clk_ll_apb_set_divider(apb_divider);
-    clk_ll_bus_update();
     esp_rom_set_cpu_ticks_per_us(cpu_freq_mhz);
 }
 
@@ -301,6 +333,10 @@ bool rtc_clk_cpu_freq_mhz_to_config(uint32_t freq_mhz, rtc_cpu_freq_config_t *ou
     return true;
 }
 
+__attribute__((weak)) void rtc_clk_set_cpu_switch_to_pll(int event_id)
+{
+}
+
 void rtc_clk_cpu_freq_set_config(const rtc_cpu_freq_config_t *config)
 {
     soc_cpu_clk_src_t old_cpu_clk_src = clk_ll_cpu_get_src();
@@ -311,6 +347,7 @@ void rtc_clk_cpu_freq_set_config(const rtc_cpu_freq_config_t *config)
         }
     } else if (config->source == SOC_CPU_CLK_SRC_CPLL) {
         if (old_cpu_clk_src != SOC_CPU_CLK_SRC_CPLL) {
+            rtc_clk_set_cpu_switch_to_pll(SLEEP_EVENT_HW_PLL_EN_START);
             rtc_clk_cpll_enable();
         }
         if (config->source_freq_mhz != s_cur_cpll_freq) {
@@ -320,6 +357,7 @@ void rtc_clk_cpu_freq_set_config(const rtc_cpu_freq_config_t *config)
             rtc_clk_cpll_configure(xtal_freq_mhz, config->source_freq_mhz);
         }
         rtc_clk_cpu_freq_to_cpll_mhz(config->freq_mhz, (hal_utils_clk_div_t *)&config->div);
+        rtc_clk_set_cpu_switch_to_pll(SLEEP_EVENT_HW_PLL_EN_STOP);
     } else if (config->source == SOC_CPU_CLK_SRC_RC_FAST) {
         rtc_clk_cpu_freq_to_8m();
         if (old_cpu_clk_src == SOC_CPU_CLK_SRC_CPLL) {
@@ -328,34 +366,42 @@ void rtc_clk_cpu_freq_set_config(const rtc_cpu_freq_config_t *config)
     }
 }
 
+static uint32_t rtc_clk_hp_root_get_freq_mhz(soc_cpu_clk_src_t clk_src)
+{
+    uint32_t source_freq_mhz = 0;
+    switch (clk_src) {
+    case SOC_CPU_CLK_SRC_XTAL:
+        source_freq_mhz = (uint32_t)rtc_clk_xtal_freq_get();
+        break;
+    case SOC_CPU_CLK_SRC_CPLL:
+        source_freq_mhz = clk_ll_cpll_get_freq_mhz((uint32_t)rtc_clk_xtal_freq_get());
+        break;
+    case SOC_CPU_CLK_SRC_RC_FAST:
+        source_freq_mhz = 20;
+        break;
+    default:
+        // Unknown HP_ROOT clock source
+        ESP_HW_LOGE(TAG, "Invalid HP_ROOT_CLK");
+        break;
+    }
+    return source_freq_mhz;
+}
+
 void rtc_clk_cpu_freq_get_config(rtc_cpu_freq_config_t *out_config)
 {
     soc_cpu_clk_src_t source = clk_ll_cpu_get_src();
-    uint32_t source_freq_mhz;
+    uint32_t source_freq_mhz = rtc_clk_hp_root_get_freq_mhz(source);
+    if (source_freq_mhz == 0) {
+        // unsupported frequency configuration
+        abort();
+    }
     hal_utils_clk_div_t div = {0}; // div = freq of SOC_ROOT_CLK / freq of CPU_CLK
-    uint32_t freq_mhz;
     clk_ll_cpu_get_divider(&div.integer, &div.numerator, &div.denominator);
     if (div.denominator == 0) {
         div.denominator = 1;
         div.numerator = 0;
     }
-    switch (source) {
-    case SOC_CPU_CLK_SRC_XTAL: {
-        source_freq_mhz = (uint32_t)rtc_clk_xtal_freq_get();
-        break;
-    }
-    case SOC_CPU_CLK_SRC_CPLL: {
-        source_freq_mhz = clk_ll_cpll_get_freq_mhz((uint32_t)rtc_clk_xtal_freq_get());
-        break;
-    }
-    case SOC_CPU_CLK_SRC_RC_FAST:
-        source_freq_mhz = 20;
-        break;
-    default:
-        ESP_HW_LOGE(TAG, "unsupported frequency configuration");
-        abort();
-    }
-    freq_mhz = source_freq_mhz * div.denominator / (div.integer * div.denominator + div.numerator);
+    uint32_t freq_mhz = source_freq_mhz * div.denominator / (div.integer * div.denominator + div.numerator);
     *out_config = (rtc_cpu_freq_config_t) {
         .source = source,
         .source_freq_mhz = source_freq_mhz,
@@ -394,6 +440,14 @@ void rtc_clk_cpu_set_to_default_config(void)
     rtc_clk_cpu_freq_to_xtal(freq_mhz, 1, true);
 }
 
+void rtc_clk_cpu_freq_set_xtal_for_sleep(void)
+{
+    int freq_mhz = (int)rtc_clk_xtal_freq_get();
+
+    rtc_clk_cpu_freq_to_xtal(freq_mhz, 1, false);
+    s_cur_cpll_freq = 0; // no disable PLL, but set freq to 0 to trigger a PLL calibration after wake-up from sleep
+}
+
 soc_xtal_freq_t rtc_clk_xtal_freq_get(void)
 {
     uint32_t xtal_freq_mhz = clk_ll_xtal_load_freq_mhz();
@@ -412,23 +466,7 @@ void rtc_clk_xtal_freq_update(soc_xtal_freq_t xtal_freq)
 uint32_t rtc_clk_apb_freq_get(void)
 {
     soc_cpu_clk_src_t source = clk_ll_cpu_get_src();
-    uint32_t source_freq_mhz;
-    switch (source) {
-    case SOC_CPU_CLK_SRC_XTAL:
-        source_freq_mhz = (uint32_t)rtc_clk_xtal_freq_get();
-        break;
-    case SOC_CPU_CLK_SRC_CPLL:
-        source_freq_mhz = clk_ll_cpll_get_freq_mhz((uint32_t)rtc_clk_xtal_freq_get());
-        break;
-    case SOC_CPU_CLK_SRC_RC_FAST:
-        source_freq_mhz = 20;
-        break;
-    default:
-        // Unknown HP_ROOT clock source
-        source_freq_mhz = 0;
-        ESP_HW_LOGE(TAG, "Invalid HP_ROOT_CLK");
-        break;
-    }
+    uint32_t source_freq_mhz = rtc_clk_hp_root_get_freq_mhz(source);
     uint32_t integer, numerator, denominator;
     clk_ll_cpu_get_divider(&integer, &numerator, &denominator);
     if (denominator == 0) {
@@ -443,18 +481,86 @@ uint32_t rtc_clk_apb_freq_get(void)
 
 void rtc_clk_apll_enable(bool enable)
 {
-    // TODO: IDF-8884
+    if (enable) {
+        clk_ll_apll_enable();
+    } else {
+        clk_ll_apll_disable();
+    }
 }
 
 uint32_t rtc_clk_apll_coeff_calc(uint32_t freq, uint32_t *_o_div, uint32_t *_sdm0, uint32_t *_sdm1, uint32_t *_sdm2)
 {
-    // TODO: IDF-8884
-    return 0;
+    uint32_t rtc_xtal_freq = (uint32_t)rtc_clk_xtal_freq_get();
+    if (rtc_xtal_freq == 0) {
+        // xtal_freq has not set yet
+        ESP_HW_LOGE(TAG, "Get xtal clock frequency failed, it has not been set yet");
+        abort();
+    }
+    /* Reference formula: apll_freq = xtal_freq * (4 + sdm2 + sdm1/256 + sdm0/65536) / ((o_div + 2) * 2)
+     *                                ----------------------------------------------   -----------------
+     *                                     350 MHz <= Numerator <= 500 MHz                Denominator
+     */
+    int o_div = 0; // range: 0~31
+    int sdm0 = 0;  // range: 0~255
+    int sdm1 = 0;  // range: 0~255
+    int sdm2 = 0;  // range: 0~63
+    /* Firstly try to satisfy the condition that the operation frequency of numerator should be greater than 350 MHz,
+     * i.e. xtal_freq * (4 + sdm2 + sdm1/256 + sdm0/65536) >= 350 MHz, '+1' in the following code is to get the ceil value.
+     * With this condition, as we know the 'o_div' can't be greater than 31, then we can calculate the APLL minimum support frequency is
+     * 350 MHz / ((31 + 2) * 2) = 5303031 Hz (for ceil) */
+    o_div = (int)(CLK_LL_APLL_MULTIPLIER_MIN_HZ / (float)(freq * 2) + 1) - 2;
+    if (o_div > 31) {
+        ESP_HW_LOGE(TAG, "Expected frequency is too small");
+        return 0;
+    }
+    if (o_div < 0) {
+        /* Try to satisfy the condition that the operation frequency of numerator should be smaller than 500 MHz,
+         * i.e. xtal_freq * (4 + sdm2 + sdm1/256 + sdm0/65536) <= 500 MHz, we need to get the floor value in the following code.
+         * With this condition, as we know the 'o_div' can't be smaller than 0, then we can calculate the APLL maximum support frequency is
+         * 500 MHz / ((0 + 2) * 2) = 125000000 Hz */
+        o_div = (int)(CLK_LL_APLL_MULTIPLIER_MAX_HZ / (float)(freq * 2)) - 2;
+        if (o_div < 0) {
+            ESP_HW_LOGE(TAG, "Expected frequency is too big");
+            return 0;
+        }
+    }
+    // sdm2 = (int)(((o_div + 2) * 2) * apll_freq / xtal_freq) - 4
+    sdm2 = (int)(((o_div + 2) * 2 * freq) / (rtc_xtal_freq * MHZ)) - 4;
+    // numrator = (((o_div + 2) * 2) * apll_freq / xtal_freq) - 4 - sdm2
+    float numrator = (((o_div + 2) * 2 * freq) / ((float)rtc_xtal_freq * MHZ)) - 4 - sdm2;
+    // If numrator is bigger than 255/256 + 255/65536 + (1/65536)/2 = 1 - (1 / 65536)/2, carry bit to sdm2
+    if (numrator > 1.0 - (1.0 / 65536.0) / 2.0) {
+        sdm2++;
+    }
+    // If numrator is smaller than (1/65536)/2, keep sdm0 = sdm1 = 0, otherwise calculate sdm0 and sdm1
+    else if (numrator > (1.0 / 65536.0) / 2.0) {
+        // Get the closest sdm1
+        sdm1 = (int)(numrator * 65536.0 + 0.5) / 256;
+        // Get the closest sdm0
+        sdm0 = (int)(numrator * 65536.0 + 0.5) % 256;
+    }
+    uint32_t real_freq = (uint32_t)(rtc_xtal_freq * MHZ * (4 + sdm2 + (float)sdm1/256.0 + (float)sdm0/65536.0) / (((float)o_div + 2) * 2));
+    *_o_div = o_div;
+    *_sdm0 = sdm0;
+    *_sdm1 = sdm1;
+    *_sdm2 = sdm2;
+    return real_freq;
 }
 
 void rtc_clk_apll_coeff_set(uint32_t o_div, uint32_t sdm0, uint32_t sdm1, uint32_t sdm2)
 {
-    // TODO: IDF-8884
+    clk_ll_apll_set_config(o_div, sdm0, sdm1, sdm2);
+
+    /* calibration */
+    ANALOG_CLOCK_ENABLE();
+    clk_ll_apll_set_calibration();
+
+    /* wait for calibration end */
+    while (!clk_ll_apll_calibration_is_done()) {
+        /* use esp_rom_delay_us so the RTC bus doesn't get flooded */
+        esp_rom_delay_us(1);
+    }
+    ANALOG_CLOCK_DISABLE();
 }
 
 void rtc_dig_clk8m_enable(void)
@@ -475,19 +581,28 @@ bool rtc_dig_8m_enabled(void)
 }
 
 //------------------------------------MPLL-------------------------------------//
-void rtc_clk_mpll_disable(void)
+TCM_IRAM_ATTR void rtc_clk_mpll_disable(void)
 {
     clk_ll_mpll_disable();
+    s_cur_mpll_freq = 0;
 }
 
-void rtc_clk_mpll_enable(void)
+TCM_IRAM_ATTR void rtc_clk_mpll_enable(void)
 {
     clk_ll_mpll_enable();
 }
 
-void rtc_clk_mpll_configure(uint32_t xtal_freq, uint32_t mpll_freq)
+void rtc_clk_mpll_configure(uint32_t xtal_freq, uint32_t mpll_freq, bool thread_safe)
 {
     /* Analog part */
+    if (thread_safe) {
+        _regi2c_ctrl_ll_master_enable_clock(true);
+    } else {
+        ANALOG_CLOCK_ENABLE();
+#if !BOOTLOADER_BUILD
+        regi2c_enter_critical();
+#endif
+    }
     /* MPLL calibration start */
     regi2c_ctrl_ll_mpll_calibration_start();
     clk_ll_mpll_set_config(mpll_freq, xtal_freq);
@@ -495,4 +610,19 @@ void rtc_clk_mpll_configure(uint32_t xtal_freq, uint32_t mpll_freq)
     while(!regi2c_ctrl_ll_mpll_calibration_is_done());
     /* MPLL calibration stop */
     regi2c_ctrl_ll_mpll_calibration_stop();
+
+    if (thread_safe) {
+        _regi2c_ctrl_ll_master_enable_clock(false);
+    } else {
+#if !BOOTLOADER_BUILD
+        regi2c_exit_critical();
+#endif
+        ANALOG_CLOCK_DISABLE();
+    }
+    s_cur_mpll_freq = mpll_freq;
+}
+
+TCM_IRAM_ATTR uint32_t rtc_clk_mpll_get_freq(void)
+{
+    return s_cur_mpll_freq;
 }

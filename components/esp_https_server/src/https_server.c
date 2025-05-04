@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2018-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2018-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -25,9 +25,16 @@ typedef struct httpd_ssl_transport_ctx {
 
 ESP_EVENT_DEFINE_BASE(ESP_HTTPS_SERVER_EVENT);
 
+#if CONFIG_ESP_HTTPS_SERVER_EVENT_POST_TIMEOUT == -1
+#define ESP_HTTPS_SERVER_EVENT_POST_TIMEOUT portMAX_DELAY
+#else
+#define ESP_HTTPS_SERVER_EVENT_POST_TIMEOUT pdMS_TO_TICKS(CONFIG_ESP_HTTPS_SERVER_EVENT_POST_TIMEOUT)
+#endif
+
+
 static void http_dispatch_event_to_event_loop(int32_t event_id, const void* event_data, size_t event_data_size)
 {
-    esp_err_t err = esp_event_post(ESP_HTTPS_SERVER_EVENT, event_id, event_data, event_data_size, portMAX_DELAY);
+    esp_err_t err = esp_event_post(ESP_HTTPS_SERVER_EVENT, event_id, event_data, event_data_size, ESP_HTTPS_SERVER_EVENT_POST_TIMEOUT);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to post http_client event: %"PRId32", error: %s", event_id, esp_err_to_name(err));
     }
@@ -270,8 +277,9 @@ static esp_err_t create_secure_context(const struct httpd_ssl_config *config, ht
 
     cfg->userdata = config->ssl_userdata;
     cfg->alpn_protos = config->alpn_protos;
+    cfg->tls_handshake_timeout_ms = config->tls_handshake_timeout_ms;
 
-#if defined(CONFIG_ESP_TLS_SERVER_CERT_SELECT_HOOK)
+#if defined(CONFIG_ESP_HTTPS_SERVER_CERT_SELECT_HOOK)
     cfg->cert_select_cb = config->cert_select_cb;
 #endif
 
@@ -305,13 +313,13 @@ static esp_err_t create_secure_context(const struct httpd_ssl_config *config, ht
             goto exit;
         }
     } else {
-#if defined(CONFIG_ESP_TLS_SERVER_CERT_SELECT_HOOK)
+#if defined(CONFIG_ESP_HTTPS_SERVER_CERT_SELECT_HOOK)
         if (config->cert_select_cb == NULL) {
 #endif
         ESP_LOGE(TAG, "No Server certificate supplied");
         ret = ESP_ERR_INVALID_ARG;
         goto exit;
-#if defined(CONFIG_ESP_TLS_SERVER_CERT_SELECT_HOOK)
+#if defined(CONFIG_ESP_HTTPS_SERVER_CERT_SELECT_HOOK)
         } else {
             ESP_LOGW(TAG, "Server certificate not supplied, make sure to supply it in the certificate selection hook!");
         }
@@ -327,6 +335,7 @@ static esp_err_t create_secure_context(const struct httpd_ssl_config *config, ht
             (*ssl_ctx)->tls_cfg->ecdsa_key_efuse_blk = config->ecdsa_key_efuse_blk;
 #else
             ESP_LOGE(TAG, "Please enable the support for signing using ECDSA peripheral in menuconfig.");
+            ret = ESP_ERR_NOT_SUPPORTED;
             goto exit;
 #endif
         } else if (config->prvtkey_pem != NULL && config->prvtkey_len > 0) {
@@ -341,7 +350,7 @@ static esp_err_t create_secure_context(const struct httpd_ssl_config *config, ht
                 goto exit;
             }
         } else {
-#if defined(CONFIG_ESP_TLS_SERVER_CERT_SELECT_HOOK)
+#if defined(CONFIG_ESP_HTTPS_SERVER_CERT_SELECT_HOOK)
             if (config->cert_select_cb == NULL) {
                 ESP_LOGE(TAG, "No Server key supplied and no certificate selection hook is present");
                 ret = ESP_ERR_INVALID_ARG;
@@ -365,7 +374,6 @@ exit:
         free((void *) cfg->cacert_buf);
     }
     free(cfg);
-    free(*ssl_ctx);
     return ret;
 }
 
@@ -378,14 +386,17 @@ esp_err_t httpd_ssl_start(httpd_handle_t *pHandle, struct httpd_ssl_config *conf
     ESP_LOGI(TAG, "Starting server");
 
     esp_err_t ret = ESP_OK;
+    httpd_ssl_ctx_t *ssl_ctx = NULL;
+
     if (HTTPD_SSL_TRANSPORT_SECURE == config->transport_mode) {
-        httpd_ssl_ctx_t *ssl_ctx = calloc(1, sizeof(httpd_ssl_ctx_t));
+        ssl_ctx = calloc(1, sizeof(httpd_ssl_ctx_t));
         if (!ssl_ctx) {
             return ESP_ERR_NO_MEM;
         }
 
         ret = create_secure_context(config, &ssl_ctx);
         if (ret != ESP_OK) {
+            free(ssl_ctx);
             return ret;
         }
 
@@ -410,7 +421,11 @@ esp_err_t httpd_ssl_start(httpd_handle_t *pHandle, struct httpd_ssl_config *conf
     httpd_handle_t handle = NULL;
 
     ret = httpd_start(&handle, &config->httpd);
-    if (ret != ESP_OK) return ret;
+    if (ret != ESP_OK) {
+        free(ssl_ctx);
+        ssl_ctx = NULL;
+        return ret;
+    }
 
     *pHandle = handle;
 

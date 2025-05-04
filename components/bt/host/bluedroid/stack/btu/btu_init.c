@@ -98,11 +98,11 @@ void btu_init_core(void)
 #endif
 
 #if BLE_INCLUDED == TRUE
-#if (defined(GATT_INCLUDED) && GATT_INCLUDED == true)
-    gatt_init();
-#endif
 #if (defined(SMP_INCLUDED) && SMP_INCLUDED == TRUE)
     SMP_Init();
+#endif
+#if (defined(GATT_INCLUDED) && GATT_INCLUDED == true)
+    gatt_init();
 #endif
     btm_ble_init();
 #endif
@@ -253,17 +253,6 @@ UINT16 BTU_BleAclPktSize(void)
     return 0;
 #endif
 }
-
-#if SCAN_QUEUE_CONGEST_CHECK
-bool BTU_check_queue_is_congest(void)
-{
-    if (osi_thread_queue_wait_size(btu_thread, 0) >= BT_QUEUE_CONGEST_SIZE) {
-        return true;
-    }
-
-    return false;
-}
-#endif
 
 int get_btu_work_queue_size(void)
 {

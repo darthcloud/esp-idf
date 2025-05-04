@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -9,11 +9,10 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_private/periph_ctrl.h"
-#include "esp_private/esp_ldo_psram.h"
 #include "esp_private/mspi_timing_tuning.h"
-#include "../esp_psram_impl.h"
+#include "esp_private/esp_psram_impl.h"
 #include "hal/psram_ctrlr_ll.h"
-#include "hal/mspi_timing_tuning_ll.h"
+#include "hal/mspi_ll.h"
 #include "clk_ctrl_os.h"
 
 // Reset and Clock Control registers are mixing with other peripherals, so we need to use a critical section
@@ -31,16 +30,19 @@
 
 #if CONFIG_SPIRAM_SPEED_250M
 #define AP_HEX_PSRAM_RD_DUMMY_BITLEN       (2*(18-1))
+#define AP_HEX_PSRAM_RD_REG_DUMMY_BITLEN   (2*(9-1))
 #define AP_HEX_PSRAM_WR_DUMMY_BITLEN       (2*(9-1))
 #define AP_HEX_PSRAM_RD_LATENCY            6
 #define AP_HEX_PSRAM_WR_LATENCY            3
 #elif CONFIG_SPIRAM_SPEED_200M
 #define AP_HEX_PSRAM_RD_DUMMY_BITLEN       (2*(14-1))
+#define AP_HEX_PSRAM_RD_REG_DUMMY_BITLEN   (2*(7-1))
 #define AP_HEX_PSRAM_WR_DUMMY_BITLEN       (2*(7-1))
 #define AP_HEX_PSRAM_RD_LATENCY            4
 #define AP_HEX_PSRAM_WR_LATENCY            1
 #else
 #define AP_HEX_PSRAM_RD_DUMMY_BITLEN       (2*(10-1))
+#define AP_HEX_PSRAM_RD_REG_DUMMY_BITLEN   (2*(5-1))
 #define AP_HEX_PSRAM_WR_DUMMY_BITLEN       (2*(5-1))
 #define AP_HEX_PSRAM_RD_LATENCY            2
 #define AP_HEX_PSRAM_WR_LATENCY            2
@@ -52,7 +54,11 @@
 #define AP_HEX_PSRAM_CS_ECC_HOLD_TIME      4
 #define AP_HEX_PSRAM_CS_HOLD_DELAY         3
 
+#if CONFIG_SPIRAM_SPEED_80M
+#define AP_HEX_PSRAM_MPLL_DEFAULT_FREQ_MHZ 320
+#else
 #define AP_HEX_PSRAM_MPLL_DEFAULT_FREQ_MHZ 400
+#endif
 
 typedef struct {
     union {
@@ -138,7 +144,7 @@ static void s_init_psram_mode_reg(int spi_num, hex_psram_mode_reg_t *mode_reg_co
     int cmd_len = 16;
     uint32_t addr = 0x0;
     int addr_bit_len = 32;
-    int dummy = AP_HEX_PSRAM_RD_DUMMY_BITLEN;
+    int dummy = AP_HEX_PSRAM_RD_REG_DUMMY_BITLEN;
     hex_psram_mode_reg_t mode_reg = {0};
     int data_bit_len = 16;
 
@@ -217,7 +223,7 @@ static void s_get_psram_mode_reg(int spi_num, hex_psram_mode_reg_t *out_reg)
 {
     int cmd_len = 16;
     int addr_bit_len = 32;
-    int dummy = AP_HEX_PSRAM_RD_DUMMY_BITLEN;
+    int dummy = AP_HEX_PSRAM_RD_REG_DUMMY_BITLEN;
     int data_bit_len = 16;
 
     //Read MR0~1 register
@@ -366,8 +372,10 @@ static void s_configure_psram_ecc(void)
 esp_err_t esp_psram_impl_enable(void)
 {
 #if SOC_CLK_MPLL_SUPPORTED
-    periph_rtc_mpll_early_acquire();
-    periph_rtc_mpll_freq_set(AP_HEX_PSRAM_MPLL_DEFAULT_FREQ_MHZ * 1000000, NULL);
+    periph_rtc_mpll_acquire();
+    uint32_t real_mpll_freq = 0;
+    periph_rtc_mpll_freq_set(AP_HEX_PSRAM_MPLL_DEFAULT_FREQ_MHZ * 1000000, &real_mpll_freq);
+    ESP_EARLY_LOGD(TAG, "real_mpll_freq: %d", real_mpll_freq);
 #endif
 
     PSRAM_RCC_ATOMIC() {
@@ -385,8 +393,8 @@ esp_err_t esp_psram_impl_enable(void)
     s_configure_psram_ecc();
 #endif
     //enter MSPI slow mode to init PSRAM device registers
-    psram_ctrlr_ll_set_bus_clock(PSRAM_CTRLR_LL_MSPI_ID_2, 40);
-    psram_ctrlr_ll_set_bus_clock(PSRAM_CTRLR_LL_MSPI_ID_3, 40);
+    psram_ctrlr_ll_set_bus_clock(PSRAM_CTRLR_LL_MSPI_ID_2, AP_HEX_PSRAM_MPLL_DEFAULT_FREQ_MHZ / CONFIG_SPIRAM_SPEED);
+    psram_ctrlr_ll_set_bus_clock(PSRAM_CTRLR_LL_MSPI_ID_3, AP_HEX_PSRAM_MPLL_DEFAULT_FREQ_MHZ / CONFIG_SPIRAM_SPEED);
     psram_ctrlr_ll_enable_dll(PSRAM_CTRLR_LL_MSPI_ID_2, true);
     psram_ctrlr_ll_enable_dll(PSRAM_CTRLR_LL_MSPI_ID_3, true);
 

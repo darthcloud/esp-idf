@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -21,8 +21,7 @@ typedef enum {
     PERIPH_UART1_MODULE,
     PERIPH_USB_DEVICE_MODULE,  // USB Serial Jtag
     PERIPH_I2C0_MODULE,
-    PERIPH_I2C1_MODULE,
-    PERIPH_I2S1_MODULE,
+    PERIPH_I2S_MODULE,
     PERIPH_TIMG0_MODULE,
     PERIPH_TIMG1_MODULE,
     PERIPH_UHCI0_MODULE,
@@ -68,6 +67,7 @@ typedef enum {
     /* Peripherals clock managed by the modem_clock driver must be listed last in the enumeration */
     PERIPH_WIFI_MODULE,
     PERIPH_BT_MODULE,
+    PERIPH_IEEE802154_MODULE,
     PERIPH_COEX_MODULE,
     PERIPH_PHY_MODULE,
     PERIPH_ANA_I2C_MASTER_MODULE,

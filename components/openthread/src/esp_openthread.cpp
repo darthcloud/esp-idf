@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -129,7 +129,7 @@ esp_err_t esp_openthread_auto_start(otOperationalDatasetTlvs *datasetTlvs)
             memcpy(dataset.mMeshLocalPrefix.m8, prefix.mPrefix.mFields.m8, sizeof(dataset.mMeshLocalPrefix.m8));
             dataset.mComponents.mIsMeshLocalPrefixPresent = true;
         } else {
-            ESP_LOGE("Falied to parse mesh local prefix", CONFIG_OPENTHREAD_MESH_LOCAL_PREFIX);
+            ESP_LOGE("Failed to parse mesh local prefix", CONFIG_OPENTHREAD_MESH_LOCAL_PREFIX);
         }
 
         // Network Key
@@ -187,9 +187,6 @@ esp_err_t esp_openthread_launch_mainloop(void)
         if (select(mainloop.max_fd + 1, &mainloop.read_fds, &mainloop.write_fds, &mainloop.error_fds,
                    &mainloop.timeout) >= 0) {
             esp_openthread_lock_acquire(portMAX_DELAY);
-#if CONFIG_FREERTOS_USE_TICKLESS_IDLE && CONFIG_OPENTHREAD_RADIO_NATIVE
-            esp_openthread_wakeup_process();
-#endif /* CONFIG_FREERTOS_USE_TICKLESS_IDLE && CONFIG_OPENTHREAD_RADIO_NATIVE */
             error = esp_openthread_platform_process(instance, &mainloop);
             while (otTaskletsArePending(instance)) {
                 otTaskletsProcess(instance);
@@ -212,14 +209,4 @@ esp_err_t esp_openthread_deinit(void)
 {
     otInstanceFinalize(esp_openthread_get_instance());
     return esp_openthread_platform_deinit();
-}
-
-static void stub_task(void *context)
-{
-    // this is a empty function used for ot-task signal pending
-}
-
-void otTaskletsSignalPending(otInstance *aInstance)
-{
-    esp_openthread_task_queue_post(stub_task, NULL);
 }

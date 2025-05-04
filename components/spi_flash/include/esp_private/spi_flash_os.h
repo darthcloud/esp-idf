@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -32,13 +32,13 @@ typedef enum {
     ESP_MSPI_IO_CS0, /* cs for spi flash */
     ESP_MSPI_IO_HD,
     ESP_MSPI_IO_WP,
-#if SOC_SPI_MEM_SUPPORT_OPI_MODE
+#if SOC_SPI_MEM_SUPPORT_FLASH_OPI_MODE
     ESP_MSPI_IO_DQS,
     ESP_MSPI_IO_D4,
     ESP_MSPI_IO_D5,
     ESP_MSPI_IO_D6,
     ESP_MSPI_IO_D7,
-#endif // SOC_SPI_MEM_SUPPORT_OPI_MODE
+#endif // SOC_SPI_MEM_SUPPORT_FLASH_OPI_MODE
 #if CONFIG_SPIRAM
     ESP_MSPI_IO_CS1, /* cs for spi ram */
 #endif
@@ -54,6 +54,11 @@ esp_err_t spi_flash_init_chip_state(void);
  * @brief To initislize the MSPI pins
  */
 void esp_mspi_pin_init(void);
+
+/**
+ * @brief Reserve MSPI IOs
+ */
+void esp_mspi_pin_reserve(void);
 
 /**
  * @brief Get the number of the GPIO corresponding to the given MSPI io
@@ -113,6 +118,13 @@ void spi_flash_set_erasing_flag(bool status);
  * @return true if need reset, otherwise false.
  */
 bool spi_flash_brownout_need_reset(void);
+
+/**
+ * @brief Check whether esp-chip supports 32bit address properly
+ *
+ * @return ESP_OK for supported, ESP_ERR_NOT_SUPPORTED for not supported
+*/
+esp_err_t esp_mspi_32bit_address_flash_feature_check(void);
 
 #if CONFIG_SPI_FLASH_HPM_ON
 /**

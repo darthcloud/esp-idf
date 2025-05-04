@@ -12,7 +12,6 @@
 
 #include "aes/esp_aes.h"
 #include "mbedtls/cipher.h"
-#include "soc/lldesc.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,6 +41,8 @@ typedef struct {
     const unsigned char *aad;             /*!< The additional data. */
     esp_aes_context aes_ctx;
     esp_aes_gcm_state gcm_state;
+    /* Software context needed for soft fallback for non-AES ciphers */
+    void *ctx_soft;
 } esp_gcm_context;
 
 

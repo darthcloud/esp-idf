@@ -138,6 +138,89 @@ typedef enum {
     COLOR_CONV_STD_RGB_YUV_BT709, /*!< YUV<->RGB conversion standard: BT.709 */
 } color_conv_std_rgb_yuv_t;
 
+/*---------------------------------------------------------------
+                      Color Endian
+---------------------------------------------------------------*/
+/**
+ * @brief RAW element order
+ */
+typedef enum {
+    COLOR_RAW_ELEMENT_ORDER_BGGR,    ///< BGGR order
+    COLOR_RAW_ELEMENT_ORDER_GBRG,    ///< GBRG order
+    COLOR_RAW_ELEMENT_ORDER_GRBG,    ///< GRBG order
+    COLOR_RAW_ELEMENT_ORDER_RGGB,    ///< RGGB order
+} color_raw_element_order_t;
+
+/**
+ * @brief RGB element order
+ */
+typedef enum {
+    COLOR_RGB_ELEMENT_ORDER_RGB, /*!< RGB element order: RGB */
+    COLOR_RGB_ELEMENT_ORDER_BGR, /*!< RGB element order: BGR */
+} color_rgb_element_order_t;
+
+/*---------------------------------------------------------------
+                Data Structure for Color Pixel Unit
+---------------------------------------------------------------*/
+
+/**
+ * @brief Data structure for ARGB8888 pixel unit
+ */
+typedef union {
+    struct {
+        uint32_t b: 8;      /*!< B component [0, 255] */
+        uint32_t g: 8;      /*!< G component [0, 255] */
+        uint32_t r: 8;      /*!< R component [0, 255] */
+        uint32_t a: 8;      /*!< A component [0, 255] */
+    };
+    uint32_t val;           /*!< 32-bit ARGB8888 value */
+} color_pixel_argb8888_data_t;
+
+/**
+ * @brief Data structure for RGB888 pixel unit
+ */
+typedef struct {
+    uint8_t b;      /*!< B component [0, 255] */
+    uint8_t g;      /*!< G component [0, 255] */
+    uint8_t r;      /*!< R component [0, 255] */
+} color_pixel_rgb888_data_t;
+
+/**
+ * @brief Data structure for RGB565 pixel unit
+ */
+typedef union {
+    struct {
+        uint16_t b: 5;      /*!< B component [0, 31] */
+        uint16_t g: 6;      /*!< G component [0, 63] */
+        uint16_t r: 5;      /*!< R component [0, 31] */
+    };
+    uint16_t val;           /*!< 16-bit RGB565 value */
+} color_pixel_rgb565_data_t;
+
+/*---------------------------------------------------------------
+                        Color Components
+---------------------------------------------------------------*/
+
+/**
+ * @brief Color component
+ */
+typedef enum {
+    COLOR_COMPONENT_R,          /*!< R component */
+    COLOR_COMPONENT_G,          /*!< G component */
+    COLOR_COMPONENT_B,          /*!< B component */
+    COLOR_COMPONENT_INVALID,    /*!< Invalid color component */
+} color_component_t;
+
+/**
+ * @brief The order of the components per pack in the YUV422 format
+ */
+typedef enum {
+    COLOR_YUV422_PACK_ORDER_YUYV, /*!< YUYV */
+    COLOR_YUV422_PACK_ORDER_YVYU, /*!< YVYU */
+    COLOR_YUV422_PACK_ORDER_UYVY, /*!< UYVY */
+    COLOR_YUV422_PACK_ORDER_VYUY, /*!< VYUY */
+} color_yuv422_pack_order_t;
+
 #ifdef __cplusplus
 }
 #endif

@@ -14,7 +14,7 @@
 
     * 将关键代码存放到 RAM 中以提高性能；
     * 将可执行代码存放到 IRAM 中，以便在缓存被禁用时运行这些代码；
-    :SOC_RTC_MEM_SUPPORTED: * 将代码存放到 RTC 存储器中，以便在 wake stub 中使用；
+    :ESP_ROM_SUPPORT_DEEP_SLEEP_WAKEUP_STUB: * 将代码存放到 RTC 存储器中，以便在 wake stub 中使用；
     :SOC_ULP_SUPPORTED: * 将代码存放到 RTC 内存中，以便 ULP 协处理器使用。
 
 链接器脚本生成机制可以让用户指定代码和数据在 ESP-IDF 组件中的存放区域。组件包含如何存放符号、目标或完整库的信息。在构建应用程序时，组件中的这些信息会被收集、解析并处理；生成的存放规则用于链接应用程序。
@@ -532,26 +532,53 @@
 
 如需引用一个 ``目标`` 标记下的所有存放规则，请使用以下语法：
 
-.. code-block:: none
+.. only:: SOC_MEM_NON_CONTIGUOUS_SRAM
 
-    mapping[target]
+    .. code-block:: none
+
+        arrays[target]      /* SURROUND 关键字下的对象 */
+        mapping[target]     /* 所有其他数据 */
+
+.. only:: not SOC_MEM_NON_CONTIGUOUS_SRAM
+
+    .. code-block:: none
+
+        mapping[target]
 
 示例：
 
 以下示例是某个链接器脚本模板的摘录，定义了输出段 ``.iram0.text``，该输出段包含一个引用目标 ``iram0_text`` 的标记。
 
-.. code-block:: none
+.. only:: SOC_MEM_NON_CONTIGUOUS_SRAM
 
-    .iram0.text :
-    {
-        /* 标记 IRAM 空间不足 */
-        _iram_text_start = ABSOLUTE(.);
+    .. code-block:: none
 
-        /* 引用 iram0_text */
-        mapping[iram0_text]
+        .iram0.text :
+        {
+            /* 标记 IRAM 空间不足 */
+            _iram_text_start = ABSOLUTE(.);
 
-        _iram_text_end = ABSOLUTE(.);
-    } > iram0_0_seg
+            /* 引用 iram0_text */
+            arrays[iram0_text]
+            mapping[iram0_text]
+
+            _iram_text_end = ABSOLUTE(.);
+        } > iram0_0_seg
+
+.. only:: not SOC_MEM_NON_CONTIGUOUS_SRAM
+
+    .. code-block:: none
+
+        .iram0.text :
+        {
+            /* 标记 IRAM 空间不足 */
+            _iram_text_start = ABSOLUTE(.);
+
+            /* 引用 iram0_text */
+            mapping[iram0_text]
+
+            _iram_text_end = ABSOLUTE(.);
+        } > iram0_0_seg
 
 假设链接器脚本生成器收集到了以下片段定义：
 

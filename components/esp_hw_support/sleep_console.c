@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -26,8 +26,11 @@ void sleep_console_usj_pad_backup_and_disable(void)
         // Enable USJ clock and clear reset
         usb_serial_jtag_ll_enable_bus_clock(true);
         usb_serial_jtag_ll_reset_register();
+        usb_serial_jtag_ll_phy_enable_pad(false);
+        s_usj_state.usj_pad_enabled = false;
+    } else {
+        s_usj_state.usj_pad_enabled = usb_serial_jtag_ll_phy_is_pad_enabled();
     }
-    s_usj_state.usj_pad_enabled = usb_serial_jtag_ll_pad_backup_and_disable();
     // Disable USJ clock
     usb_serial_jtag_ll_enable_bus_clock(false);
 }
@@ -40,7 +43,7 @@ void sleep_console_usj_pad_restore(void)
     int __DECLARE_RCC_ATOMIC_ENV __attribute__ ((unused));
 
     usb_serial_jtag_ll_enable_bus_clock(true);
-    usb_serial_jtag_ll_enable_pad(s_usj_state.usj_pad_enabled);
+    usb_serial_jtag_ll_phy_enable_pad(s_usj_state.usj_pad_enabled);
     if (!s_usj_state.usj_clock_enabled) {
         usb_serial_jtag_ll_enable_bus_clock(false);
     }

@@ -1,14 +1,14 @@
 /*
- * SPDX-FileCopyrightText: 2018-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2018-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <string.h>
+#include "esp_macros.h"
 #include "esp_system.h"
 #include "esp_private/system_internal.h"
 #include "esp_attr.h"
-#include "esp_efuse.h"
 #include "esp_log.h"
 #include "esp_ipc_isr.h"
 #include "sdkconfig.h"
@@ -51,6 +51,12 @@ void IRAM_ATTR esp_system_reset_modules_on_exit(void)
                             DPORT_SPI_DMA_RST | DPORT_UART_RST | DPORT_UART1_RST | DPORT_UART2_RST |
                             DPORT_UART_MEM_RST | DPORT_PWM0_RST | DPORT_PWM1_RST);
     DPORT_REG_WRITE(DPORT_PERIP_RST_EN_REG, 0);
+
+    // Reset crypto peripherals. This ensures a clean state for the crypto peripherals after a CPU restart and hence
+    // avoiding any possibility with crypto failure in ROM security workflows.
+    DPORT_SET_PERI_REG_MASK(DPORT_PERI_RST_EN_REG, DPORT_PERI_EN_AES | DPORT_PERI_EN_RSA |
+                            DPORT_PERI_EN_SHA | DPORT_PERI_EN_DIGITAL_SIGNATURE);
+    DPORT_REG_WRITE(DPORT_PERI_RST_EN_REG, 0);
 }
 
 /* "inner" restart function for after RTOS, interrupts & anything else on this
@@ -97,9 +103,9 @@ void IRAM_ATTR esp_restart_noos(void)
     wdt_hal_disable(&wdt1_context);
     wdt_hal_write_protect_enable(&wdt1_context);
 
-#ifdef CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+#ifdef CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
     if (esp_ptr_external_ram(esp_cpu_get_sp())) {
-        // If stack_addr is from External Memory (CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY is used)
+        // If stack_addr is from External Memory (CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM is used)
         // then need to switch SP to Internal Memory otherwise
         // we will get the "Cache disabled but cached memory region accessed" error after Cache_Read_Disable.
         uint32_t new_sp = SOC_DRAM_LOW + (SOC_DRAM_HIGH - SOC_DRAM_LOW) / 2;
@@ -141,7 +147,6 @@ void IRAM_ATTR esp_restart_noos(void)
         esp_cpu_unstall(0);
         esp_rom_software_reset_cpu(1);
     }
-    while (true) {
-        ;
-    }
+
+    ESP_INFINITE_LOOP();
 }

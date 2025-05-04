@@ -12,16 +12,12 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "esp_err.h"
-#include "soc/gpio_periph.h"
 #include "soc/clk_tree_defs.h"
 #include "soc/soc_caps.h"
-#include "hal/gpio_hal.h"
 #include "hal/uart_ll.h"
 #include "esp_private/periph_ctrl.h"
-#include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/i2c_slave.h"
-#include "esp_rom_gpio.h"
 #include "esp_log.h"
 #include "test_utils.h"
 #include "test_board.h"
@@ -61,6 +57,8 @@ static void i2c_master_write_test_broadcast(void)
     i2c_master_dev_handle_t dev_handle;
     TEST_ESP_OK(i2c_master_bus_add_device(bus_handle, &dev_cfg, &dev_handle));
 
+    unity_send_signal("i2c master init first");
+
     unity_wait_for_signal("i2c slave init finish");
 
     unity_send_signal("master write");
@@ -78,6 +76,7 @@ static void i2c_master_write_test_broadcast(void)
 
 static void i2c_slave_read_test_broadcast(void)
 {
+    unity_wait_for_signal("i2c master init first");
     uint8_t data_rd[DATA_LENGTH] = {0};
 
     i2c_slave_config_t i2c_slv_config = {

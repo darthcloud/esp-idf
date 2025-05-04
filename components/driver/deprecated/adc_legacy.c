@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -16,9 +16,9 @@
 #include "esp_check.h"
 #include "esp_pm.h"
 #include "soc/rtc.h"
-#include "driver/rtc_io.h"
+#include "soc/soc_caps.h"
+#include "esp_private/gpio.h"
 #include "sys/lock.h"
-#include "driver/gpio.h"
 #include "esp_private/adc_share_hw_ctrl.h"
 #include "esp_private/sar_periph_ctrl.h"
 #include "adc1_private.h"
@@ -26,6 +26,8 @@
 #include "hal/adc_hal.h"
 #include "hal/adc_ll.h"
 #include "hal/adc_hal_common.h"
+#include "esp_private/esp_clk_tree_common.h"
+#include "esp_private/regi2c_ctrl.h"
 #include "esp_private/periph_ctrl.h"
 #include "driver/adc_types_legacy.h"
 #include "esp_clk_tree.h"
@@ -38,7 +40,6 @@
 #if CONFIG_IDF_TARGET_ESP32S3
 #include "esp_efuse_rtc_calib.h"
 #endif
-
 
 static const char *ADC_TAG = "ADC";
 
@@ -71,13 +72,12 @@ extern portMUX_TYPE rtc_spinlock; //TODO: Will be placed in the appropriate posi
 #define FSM_ENTER()             RTC_ENTER_CRITICAL()
 #define FSM_EXIT()              RTC_EXIT_CRITICAL()
 
-#if CONFIG_IDF_TARGET_ESP32 || CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32S3
+#if CONFIG_IDF_TARGET_ESP32 || CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
 //prevent ADC1 being used by I2S dma and other tasks at the same time.
 static _lock_t adc1_dma_lock;
 #define SARADC1_ACQUIRE() _lock_acquire( &adc1_dma_lock )
 #define SARADC1_RELEASE() _lock_release( &adc1_dma_lock )
 #endif
-
 
 /*
 In ADC2, there're two locks used for different cases:
@@ -174,7 +174,6 @@ static void adc_rtc_chan_init(adc_unit_t adc_unit)
 esp_err_t adc_common_gpio_init(adc_unit_t adc_unit, adc_channel_t channel)
 {
     ESP_RETURN_ON_FALSE(channel < SOC_ADC_CHANNEL_NUM(adc_unit), ESP_ERR_INVALID_ARG, ADC_TAG, "invalid channel");
-
     gpio_num_t gpio_num = 0;
     //If called with `ADC_UNIT_BOTH (ADC_UNIT_1 | ADC_UNIT_2)`, both if blocks will be run
     if (adc_unit == ADC_UNIT_1) {
@@ -185,13 +184,7 @@ esp_err_t adc_common_gpio_init(adc_unit_t adc_unit, adc_channel_t channel)
     } else {
         return ESP_ERR_INVALID_ARG;
     }
-
-    ESP_RETURN_ON_ERROR(rtc_gpio_init(gpio_num), ADC_TAG, "rtc_gpio_init fail");
-    ESP_RETURN_ON_ERROR(rtc_gpio_set_direction(gpio_num, RTC_GPIO_MODE_DISABLED), ADC_TAG, "rtc_gpio_set_direction fail");
-    ESP_RETURN_ON_ERROR(rtc_gpio_pulldown_dis(gpio_num), ADC_TAG, "rtc_gpio_pulldown_dis fail");
-    ESP_RETURN_ON_ERROR(rtc_gpio_pullup_dis(gpio_num), ADC_TAG, "rtc_gpio_pullup_dis fail");
-
-    return ESP_OK;
+    return gpio_config_as_analog(gpio_num);
 }
 
 esp_err_t adc_set_data_inv(adc_unit_t adc_unit, bool inv_en)
@@ -218,21 +211,21 @@ esp_err_t adc_set_data_width(adc_unit_t adc_unit, adc_bits_width_t width_bit)
     if ((uint32_t)width_bit == (uint32_t)ADC_BITWIDTH_DEFAULT) {
         bitwidth = SOC_ADC_RTC_MAX_BITWIDTH;
     } else {
-        switch(width_bit) {
-            case ADC_WIDTH_BIT_9:
-                bitwidth = ADC_BITWIDTH_9;
-                break;
-            case ADC_WIDTH_BIT_10:
-                bitwidth = ADC_BITWIDTH_10;
-                break;
-            case ADC_WIDTH_BIT_11:
-                bitwidth = ADC_BITWIDTH_11;
-                break;
-            case ADC_WIDTH_BIT_12:
-                bitwidth = ADC_BITWIDTH_12;
-                break;
-            default:
-                return ESP_ERR_INVALID_ARG;
+        switch (width_bit) {
+        case ADC_WIDTH_BIT_9:
+            bitwidth = ADC_BITWIDTH_9;
+            break;
+        case ADC_WIDTH_BIT_10:
+            bitwidth = ADC_BITWIDTH_10;
+            break;
+        case ADC_WIDTH_BIT_11:
+            bitwidth = ADC_BITWIDTH_11;
+            break;
+        case ADC_WIDTH_BIT_12:
+            bitwidth = ADC_BITWIDTH_12;
+            break;
+        default:
+            return ESP_ERR_INVALID_ARG;
         }
     }
 #elif CONFIG_IDF_TARGET_ESP32S2
@@ -292,10 +285,6 @@ esp_err_t adc1_config_channel_atten(adc1_channel_t channel, adc_atten_t atten)
     adc_oneshot_ll_set_atten(ADC_UNIT_1, channel, atten);
     SARADC1_EXIT();
 
-#if SOC_ADC_CALIBRATION_V1_SUPPORTED
-    adc_hal_calibration_init(ADC_UNIT_1);
-#endif
-
     return ESP_OK;
 }
 
@@ -307,21 +296,21 @@ esp_err_t adc1_config_width(adc_bits_width_t width_bit)
     if ((uint32_t)width_bit == (uint32_t)ADC_BITWIDTH_DEFAULT) {
         bitwidth = SOC_ADC_RTC_MAX_BITWIDTH;
     } else {
-        switch(width_bit) {
-            case ADC_WIDTH_BIT_9:
-                bitwidth = ADC_BITWIDTH_9;
-                break;
-            case ADC_WIDTH_BIT_10:
-                bitwidth = ADC_BITWIDTH_10;
-                break;
-            case ADC_WIDTH_BIT_11:
-                bitwidth = ADC_BITWIDTH_11;
-                break;
-            case ADC_WIDTH_BIT_12:
-                bitwidth = ADC_BITWIDTH_12;
-                break;
-            default:
-                return ESP_ERR_INVALID_ARG;
+        switch (width_bit) {
+        case ADC_WIDTH_BIT_9:
+            bitwidth = ADC_BITWIDTH_9;
+            break;
+        case ADC_WIDTH_BIT_10:
+            bitwidth = ADC_BITWIDTH_10;
+            break;
+        case ADC_WIDTH_BIT_11:
+            bitwidth = ADC_BITWIDTH_11;
+            break;
+        case ADC_WIDTH_BIT_12:
+            bitwidth = ADC_BITWIDTH_12;
+            break;
+        default:
+            return ESP_ERR_INVALID_ARG;
         }
     }
 #elif CONFIG_IDF_TARGET_ESP32S2
@@ -342,7 +331,7 @@ esp_err_t adc1_dma_mode_acquire(void)
     /* Use locks to avoid digtal and RTC controller conflicts.
        for adc1, block until acquire the lock. */
     SARADC1_ACQUIRE();
-    ESP_LOGD( ADC_TAG, "dma mode takes adc1 lock." );
+    ESP_LOGD(ADC_TAG, "dma mode takes adc1 lock.");
 
     sar_periph_ctrl_adc_continuous_power_acquire();
 
@@ -385,10 +374,15 @@ int adc1_get_raw(adc1_channel_t channel)
     ESP_RETURN_ON_FALSE(channel < SOC_ADC_CHANNEL_NUM(ADC_UNIT_1), ESP_ERR_INVALID_ARG, ADC_TAG, "invalid channel");
     adc1_rtc_mode_acquire();
 
+    ANALOG_CLOCK_ENABLE();
+
 #if SOC_ADC_CALIBRATION_V1_SUPPORTED
+    adc_hal_calibration_init(ADC_UNIT_1);
     adc_atten_t atten = adc_ll_get_atten(ADC_UNIT_1, channel);
     adc_set_hw_calibration_code(ADC_UNIT_1, atten);
 #endif  //SOC_ADC_CALIBRATION_V1_SUPPORTED
+
+    ANALOG_CLOCK_DISABLE();
 
     SARADC1_ENTER();
 #ifdef CONFIG_IDF_TARGET_ESP32
@@ -465,10 +459,6 @@ esp_err_t adc2_config_channel_atten(adc2_channel_t channel, adc_atten_t atten)
     adc_lock_release(ADC_UNIT_2);
 #endif
 
-#if SOC_ADC_CALIBRATION_V1_SUPPORTED
-    adc_hal_calibration_init(ADC_UNIT_2);
-#endif
-
     return ESP_OK;
 }
 
@@ -484,19 +474,19 @@ static inline void adc2_init(void)
 #endif  //CONFIG_IDF_TARGET_ESP32S2
 }
 
-static inline void adc2_dac_disable( adc2_channel_t channel)
+static inline void adc2_dac_disable(adc2_channel_t channel)
 {
 #if SOC_DAC_SUPPORTED
 #ifdef CONFIG_IDF_TARGET_ESP32
-    if ( channel == ADC2_CHANNEL_8 ) { // the same as DAC channel 0
+    if (channel == ADC2_CHANNEL_8) {   // the same as DAC channel 0
         dac_ll_power_down(DAC_CHAN_0);
-    } else if ( channel == ADC2_CHANNEL_9 ) {
+    } else if (channel == ADC2_CHANNEL_9) {
         dac_ll_power_down(DAC_CHAN_1);
     }
 #else
-    if ( channel == ADC2_CHANNEL_6 ) { // the same as DAC channel 0
+    if (channel == ADC2_CHANNEL_6) {   // the same as DAC channel 0
         dac_ll_power_down(DAC_CHAN_0);
-    } else if ( channel == ADC2_CHANNEL_7 ) {
+    } else if (channel == ADC2_CHANNEL_7) {
         dac_ll_power_down(DAC_CHAN_1);
     }
 #endif
@@ -522,21 +512,21 @@ esp_err_t adc2_get_raw(adc2_channel_t channel, adc_bits_width_t width_bit, int *
     if ((uint32_t)width_bit == (uint32_t)ADC_BITWIDTH_DEFAULT) {
         bitwidth = SOC_ADC_RTC_MAX_BITWIDTH;
     } else {
-        switch(width_bit) {
-            case ADC_WIDTH_BIT_9:
-                bitwidth = ADC_BITWIDTH_9;
-                break;
-            case ADC_WIDTH_BIT_10:
-                bitwidth = ADC_BITWIDTH_10;
-                break;
-            case ADC_WIDTH_BIT_11:
-                bitwidth = ADC_BITWIDTH_11;
-                break;
-            case ADC_WIDTH_BIT_12:
-                bitwidth = ADC_BITWIDTH_12;
-                break;
-            default:
-                return ESP_ERR_INVALID_ARG;
+        switch (width_bit) {
+        case ADC_WIDTH_BIT_9:
+            bitwidth = ADC_BITWIDTH_9;
+            break;
+        case ADC_WIDTH_BIT_10:
+            bitwidth = ADC_BITWIDTH_10;
+            break;
+        case ADC_WIDTH_BIT_11:
+            bitwidth = ADC_BITWIDTH_11;
+            break;
+        case ADC_WIDTH_BIT_12:
+            bitwidth = ADC_BITWIDTH_12;
+            break;
+        default:
+            return ESP_ERR_INVALID_ARG;
         }
     }
 #elif CONFIG_IDF_TARGET_ESP32S2
@@ -544,11 +534,6 @@ esp_err_t adc2_get_raw(adc2_channel_t channel, adc_bits_width_t width_bit, int *
 #else   //esp32s3
     bitwidth = ADC_BITWIDTH_12;
 #endif
-
-#if SOC_ADC_CALIBRATION_V1_SUPPORTED
-    adc_atten_t atten = adc_ll_get_atten(ADC_UNIT_2, channel);
-    adc_set_hw_calibration_code(ADC_UNIT_2, atten);
-#endif  //SOC_ADC_CALIBRATION_V1_SUPPORTED
 
 #if CONFIG_IDF_TARGET_ESP32
     /** For ESP32S2 and S3, the right to use ADC2 is controlled by the arbiter, and there is no need to set a lock.*/
@@ -558,6 +543,12 @@ esp_err_t adc2_get_raw(adc2_channel_t channel, adc_bits_width_t width_bit, int *
     }
 #endif
     sar_periph_ctrl_adc_oneshot_power_acquire();         //in critical section with whole rtc module
+
+#if SOC_ADC_CALIBRATION_V1_SUPPORTED
+    adc_hal_calibration_init(ADC_UNIT_2);
+    adc_atten_t atten = adc_ll_get_atten(ADC_UNIT_2, channel);
+    adc_set_hw_calibration_code(ADC_UNIT_2, atten);
+#endif  //SOC_ADC_CALIBRATION_V1_SUPPORTED
 
     //avoid collision with other tasks
     adc2_init();   // in critical section with whole rtc module. because the PWDET use the same registers, place it here.
@@ -573,7 +564,7 @@ esp_err_t adc2_get_raw(adc2_channel_t channel, adc_bits_width_t width_bit, int *
 #endif
     adc_oneshot_ll_set_output_bits(ADC_UNIT_2, bitwidth);
 
-#if CONFIG_IDF_TARGET_ESP32
+#if CONFIG_IDF_TARGET_ESP32 || CONFIG_IDF_TARGET_ESP32P4
     adc_ll_set_controller(ADC_UNIT_2, ADC_LL_CTRL_RTC);// set controller
 #else
     adc_ll_set_controller(ADC_UNIT_2, ADC_LL_CTRL_ARB);// set controller
@@ -650,7 +641,6 @@ esp_err_t adc_vref_to_gpio(adc_unit_t adc_unit, gpio_num_t gpio)
 #endif //SOC_ADC_RTC_CTRL_SUPPORTED
 #endif  //#if (SOC_ADC_PERIPH_NUM >= 2)
 
-
 #if SOC_ADC_DIG_CTRL_SUPPORTED && !SOC_ADC_RTC_CTRL_SUPPORTED
 /*---------------------------------------------------------------
             Legacy ADC Single Read Mode
@@ -667,7 +657,6 @@ static adc_atten_t s_atten1_single[ADC1_CHANNEL_MAX];    //Array saving attenuat
 static adc_atten_t s_atten2_single[ADC2_CHANNEL_MAX];    //Array saving attenuate of each channel of ADC2, used by single read API
 #endif
 
-
 static int8_t adc_digi_get_io_num(adc_unit_t adc_unit, uint8_t adc_channel)
 {
     assert(adc_unit < SOC_ADC_PERIPH_NUM);
@@ -678,7 +667,6 @@ static int8_t adc_digi_get_io_num(adc_unit_t adc_unit, uint8_t adc_channel)
 static esp_err_t adc_digi_gpio_init(adc_unit_t adc_unit, uint16_t channel_mask)
 {
     esp_err_t ret = ESP_OK;
-    uint64_t gpio_mask = 0;
     uint32_t n = 0;
     int8_t io = 0;
 
@@ -688,18 +676,11 @@ static esp_err_t adc_digi_gpio_init(adc_unit_t adc_unit, uint16_t channel_mask)
             if (io < 0) {
                 return ESP_ERR_INVALID_ARG;
             }
-            gpio_mask |= BIT64(io);
+            gpio_config_as_analog(io);
         }
         channel_mask = channel_mask >> 1;
         n++;
     }
-
-    gpio_config_t cfg = {
-        .pin_bit_mask = gpio_mask,
-        .mode = GPIO_MODE_DISABLE,
-    };
-    ret = gpio_config(&cfg);
-
     return ret;
 }
 
@@ -762,10 +743,6 @@ esp_err_t adc1_config_channel_atten(adc1_channel_t channel, adc_atten_t atten)
     s_atten1_single[channel] = atten;
     ret = adc_digi_gpio_init(ADC_UNIT_1, BIT(channel));
 
-#if SOC_ADC_CALIBRATION_V1_SUPPORTED
-    adc_hal_calibration_init(ADC_UNIT_1);
-#endif
-
     return ret;
 }
 
@@ -779,12 +756,19 @@ int adc1_get_raw(adc1_channel_t channel)
 
     adc_apb_periph_claim();
     sar_periph_ctrl_adc_oneshot_power_acquire();
+    esp_clk_tree_enable_src((soc_module_clk_t)ADC_DIGI_CLK_SRC_DEFAULT, true);
     adc_ll_digi_clk_sel(ADC_DIGI_CLK_SRC_DEFAULT);
 
     adc_atten_t atten = s_atten1_single[channel];
+
+    ANALOG_CLOCK_ENABLE();
+
 #if SOC_ADC_CALIBRATION_V1_SUPPORTED
+    adc_hal_calibration_init(ADC_UNIT_1);
     adc_set_hw_calibration_code(ADC_UNIT_1, atten);
 #endif
+
+    ANALOG_CLOCK_DISABLE();
 
     ADC_REG_LOCK_ENTER();
     adc_oneshot_ll_set_atten(ADC_UNIT_1, channel, atten);
@@ -836,10 +820,13 @@ esp_err_t adc2_get_raw(adc2_channel_t channel, adc_bits_width_t width_bit, int *
 
     adc_apb_periph_claim();
     sar_periph_ctrl_adc_oneshot_power_acquire();
+    esp_clk_tree_enable_src((soc_module_clk_t)ADC_DIGI_CLK_SRC_DEFAULT, true);
     adc_ll_digi_clk_sel(ADC_DIGI_CLK_SRC_DEFAULT);
 
+#if SOC_ADC_ARBITER_SUPPORTED
     adc_arbiter_t config = ADC_ARBITER_CONFIG_DEFAULT();
     adc_hal_arbiter_config(&config);
+#endif
 
     adc_atten_t atten = s_atten2_single[channel];
 #if SOC_ADC_CALIBRATION_V1_SUPPORTED
@@ -860,7 +847,6 @@ esp_err_t adc2_get_raw(adc2_channel_t channel, adc_bits_width_t width_bit, int *
 #endif //#if (SOC_ADC_PERIPH_NUM >= 2)
 #endif  //#if SOC_ADC_DIG_CTRL_SUPPORTED && !SOC_ADC_RTC_CTRL_SUPPORTED
 
-
 static void adc_hal_onetime_start(adc_unit_t adc_n, uint32_t clk_src_freq_hz)
 {
 #if SOC_ADC_DIG_CTRL_SUPPORTED && !SOC_ADC_RTC_CTRL_SUPPORTED
@@ -876,7 +862,7 @@ static void adc_hal_onetime_start(adc_unit_t adc_n, uint32_t clk_src_freq_hz)
     //3 ADC digital controller clock cycle
     delay = delay * 3;
     //This coefficient (8) is got from test, and verified from DT. When digi_clk is not smaller than ``APB_CLK_FREQ/8``, no delay is needed.
-    if (digi_clk >= APB_CLK_FREQ/8) {
+    if (digi_clk >= APB_CLK_FREQ / 8) {
         delay = 0;
     }
 
@@ -884,7 +870,7 @@ static void adc_hal_onetime_start(adc_unit_t adc_n, uint32_t clk_src_freq_hz)
     esp_rom_delay_us(delay);
     adc_oneshot_ll_start(true);
 
-    //No need to delay here. Becuase if the start signal is not seen, there won't be a done intr.
+    //No need to delay here. Because if the start signal is not seen, there won't be a done intr.
 #else
     (void)clk_src_freq_hz;
     adc_oneshot_ll_start(adc_n);
@@ -917,6 +903,7 @@ static esp_err_t adc_hal_convert(adc_unit_t adc_n, int channel, uint32_t clk_src
     return ESP_OK;
 }
 
+#if !CONFIG_ADC_SKIP_LEGACY_CONFLICT_CHECK
 /**
  * @brief This function will be called during start up, to check that adc_oneshot driver is not running along with the legacy adc oneshot driver
  */
@@ -932,6 +919,7 @@ static void check_adc_oneshot_driver_conflict(void)
     }
     ESP_EARLY_LOGW(ADC_TAG, "legacy driver is deprecated, please migrate to `esp_adc/adc_oneshot.h`");
 }
+#endif //CONFIG_ADC_SKIP_LEGACY_CONFLICT_CHECK
 
 #if SOC_ADC_CALIBRATION_V1_SUPPORTED
 /*---------------------------------------------------------------
@@ -939,6 +927,7 @@ static void check_adc_oneshot_driver_conflict(void)
 ---------------------------------------------------------------*/
 static __attribute__((constructor)) void adc_hw_calibration(void)
 {
+    ANALOG_CLOCK_ENABLE();
     //Calculate all ICode
     for (int i = 0; i < SOC_ADC_PERIPH_NUM; i++) {
         adc_hal_calibration_init(i);
@@ -956,5 +945,6 @@ static __attribute__((constructor)) void adc_hw_calibration(void)
 #endif
         }
     }
+    ANALOG_CLOCK_DISABLE();
 }
 #endif  //#if SOC_ADC_CALIBRATION_V1_SUPPORTED

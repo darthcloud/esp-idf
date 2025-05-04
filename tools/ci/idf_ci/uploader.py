@@ -16,6 +16,7 @@ from idf_build_apps import App
 from idf_build_apps.utils import rmdir
 from idf_ci_utils import IDF_PATH
 from idf_pytest.constants import DEFAULT_BUILD_LOG_FILENAME
+from idf_pytest.constants import DEFAULT_SIZE_JSON_FILENAME
 
 
 class AppDownloader:
@@ -44,16 +45,21 @@ class AppUploader(AppDownloader):
         ArtifactType.MAP_AND_ELF_FILES: [
             'bootloader/*.map',
             'bootloader/*.elf',
+            'esp_tee/*.map',
+            'esp_tee/*.elf',
             '*.map',
             '*.elf',
+            'gdbinit/*',
         ],
         ArtifactType.BUILD_DIR_WITHOUT_MAP_AND_ELF_FILES: [
             '*.bin',
             'bootloader/*.bin',
+            'esp_tee/*.bin',
             'partition_table/*.bin',
             'flasher_args.json',
             'flash_project_args',
             'config/sdkconfig.json',
+            'sdkconfig',
             'project_description.json',
         ],
         ArtifactType.LOGS: [
@@ -91,7 +97,6 @@ class AppUploader(AppDownloader):
         try:
             if has_file:
                 obj_name = self.get_app_object_name(app_path, zip_filename, artifact_type)
-                print(f'Created archive file: {zip_filename}, uploading as {obj_name}')
                 self._client.fput_object(getenv('IDF_S3_BUCKET'), obj_name, zip_filename)
                 uploaded = True
         finally:
@@ -101,17 +106,17 @@ class AppUploader(AppDownloader):
     def upload_app(self, app_build_path: str, artifact_type: t.Optional[ArtifactType] = None) -> None:
         uploaded = False
         if not artifact_type:
-            for _artifact_type in [
-                ArtifactType.MAP_AND_ELF_FILES,
-                ArtifactType.BUILD_DIR_WITHOUT_MAP_AND_ELF_FILES,
-                ArtifactType.LOGS,
-            ]:
-                uploaded |= self._upload_app(app_build_path, _artifact_type)
+            upload_types: t.Iterable[ArtifactType] = self.TYPE_PATTERNS_DICT.keys()
         else:
-            uploaded = self._upload_app(app_build_path, artifact_type)
+            upload_types = [artifact_type]
+
+        # Upload of size.json files is handled by GitLab CI via "artifacts_handler.py" script.
+        print(f'Uploading {app_build_path} {[k.value for k in upload_types]} to minio server')
+        for upload_type in upload_types:
+            uploaded |= self._upload_app(app_build_path, upload_type)
 
         if uploaded:
-            rmdir(app_build_path, exclude_file_patterns=DEFAULT_BUILD_LOG_FILENAME)
+            rmdir(app_build_path, exclude_file_patterns=[DEFAULT_BUILD_LOG_FILENAME, DEFAULT_SIZE_JSON_FILENAME])
 
     def _download_app(self, app_build_path: str, artifact_type: ArtifactType) -> None:
         app_path, build_dir = os.path.split(app_build_path)

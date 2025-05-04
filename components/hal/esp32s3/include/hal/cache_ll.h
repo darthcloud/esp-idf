@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -359,6 +359,32 @@ static inline void cache_ll_invalidate_addr(uint32_t cache_level, cache_type_t t
 {
     Cache_Invalidate_Addr(vaddr, size);
 }
+
+/**
+ * @brief Invalidate all
+ *
+ * @param cache_level       level of the cache
+ * @param type              see `cache_type_t`
+ * @param cache_id          id of the cache in this type and level
+ */
+__attribute__((always_inline))
+static inline void cache_ll_invalidate_all(uint32_t cache_level, cache_type_t type, uint32_t cache_id)
+{
+    switch (type)
+    {
+    case CACHE_TYPE_DATA:
+        Cache_Invalidate_DCache_All();
+        break;
+    case CACHE_TYPE_INSTRUCTION:
+        Cache_Invalidate_ICache_All();
+        break;
+    default: //CACHE_TYPE_ALL
+        Cache_Invalidate_ICache_All();
+        Cache_Invalidate_DCache_All();
+        break;
+    }
+}
+
 
 /**
  * @brief Writeback cache supported addr
@@ -750,6 +776,23 @@ static inline void cache_ll_l1_clear_illegal_error_intr(uint32_t cache_id, uint3
 static inline uint32_t cache_ll_l1_get_illegal_error_intr_status(uint32_t cache_id, uint32_t mask)
 {
     return GET_PERI_REG_MASK(EXTMEM_CACHE_ILG_INT_ST_REG, mask);
+}
+
+/**
+ * @brief Read vaddr that caused acs dbus reject error
+ *
+ * @param cache_id cache id to get vaddr from
+ *
+ * @return vaddr that cause the acs dbus reject error
+ */
+__attribute__((always_inline))
+static inline uint32_t cache_ll_get_acs_dbus_reject_vaddr(uint32_t cache_id)
+{
+    if (cache_id == 0) {
+        return REG_READ(EXTMEM_CORE0_DBUS_REJECT_VADDR_REG);
+    } else {
+        return REG_READ(EXTMEM_CORE1_DBUS_REJECT_VADDR_REG);
+    }
 }
 
 #ifdef __cplusplus

@@ -1,6 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2006-2016 ARM Limited
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -33,6 +33,7 @@
 #define EXAMPLE_EAP_ID CONFIG_EXAMPLE_EAP_ID
 #define EXAMPLE_EAP_USERNAME CONFIG_EXAMPLE_EAP_USERNAME
 #define EXAMPLE_EAP_PASSWORD CONFIG_EXAMPLE_EAP_PASSWORD
+#define EXAMPLE_SERVER_CERT_DOMAIN CONFIG_EXAMPLE_SERVER_CERT_DOMAIN
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
 static EventGroupHandle_t wifi_event_group;
@@ -57,10 +58,17 @@ static const char *TAG = "example";
    To embed it in the app binary, the PEM, CRT and KEY file is named
    in the component.mk COMPONENT_EMBED_TXTFILES variable.
 */
-#ifdef CONFIG_EXAMPLE_VALIDATE_SERVER_CERT
+#if defined(CONFIG_EXAMPLE_VALIDATE_SERVER_CERT) || \
+    defined(CONFIG_EXAMPLE_WPA3_ENTERPRISE) || \
+    defined(CONFIG_EXAMPLE_WPA3_192BIT_ENTERPRISE) || \
+    defined(CONFIG_ESP_WIFI_EAP_TLS1_3)
+#define SERVER_CERT_VALIDATION_ENABLED
+#endif
+
+#ifdef SERVER_CERT_VALIDATION_ENABLED
 extern uint8_t ca_pem_start[] asm("_binary_ca_pem_start");
 extern uint8_t ca_pem_end[]   asm("_binary_ca_pem_end");
-#endif /* CONFIG_EXAMPLE_VALIDATE_SERVER_CERT */
+#endif /* SERVER_CERT_VALIDATION_ENABLED */
 
 #ifdef CONFIG_EXAMPLE_EAP_METHOD_TLS
 extern uint8_t client_crt_start[] asm("_binary_client_crt_start");
@@ -88,9 +96,9 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 
 static void initialise_wifi(void)
 {
-#ifdef CONFIG_EXAMPLE_VALIDATE_SERVER_CERT
+#ifdef SERVER_CERT_VALIDATION_ENABLED
     unsigned int ca_pem_bytes = ca_pem_end - ca_pem_start;
-#endif /* CONFIG_EXAMPLE_VALIDATE_SERVER_CERT */
+#endif /* SERVER_CERT_VALIDATION_ENABLED */
 
 #ifdef CONFIG_EXAMPLE_EAP_METHOD_TLS
     unsigned int client_crt_bytes = client_crt_end - client_crt_start;
@@ -123,11 +131,9 @@ static void initialise_wifi(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
     ESP_ERROR_CHECK(esp_eap_client_set_identity((uint8_t *)EXAMPLE_EAP_ID, strlen(EXAMPLE_EAP_ID)) );
 
-#if defined(CONFIG_EXAMPLE_VALIDATE_SERVER_CERT) || \
-    defined(CONFIG_EXAMPLE_WPA3_ENTERPRISE) || \
-    defined(CONFIG_EXAMPLE_WPA3_192BIT_ENTERPRISE)
+#ifdef SERVER_CERT_VALIDATION_ENABLED
     ESP_ERROR_CHECK(esp_eap_client_set_ca_cert(ca_pem_start, ca_pem_bytes) );
-#endif /* CONFIG_EXAMPLE_VALIDATE_SERVER_CERT */ /* EXAMPLE_WPA3_ENTERPRISE */
+#endif /* SERVER_CERT_VALIDATION_ENABLED */
 
 #ifdef CONFIG_EXAMPLE_EAP_METHOD_TLS
     ESP_ERROR_CHECK(esp_eap_client_set_certificate_and_key(client_crt_start, client_crt_bytes,
@@ -150,6 +156,9 @@ static void initialise_wifi(void)
 #endif
 #ifdef CONFIG_EXAMPLE_USE_DEFAULT_CERT_BUNDLE
     ESP_ERROR_CHECK(esp_eap_client_use_default_cert_bundle(true));
+#endif
+#ifdef CONFIG_EXAMPLE_VALIDATE_SERVER_CERT_DOMAIN
+    ESP_ERROR_CHECK(esp_eap_client_set_domain_name(EXAMPLE_SERVER_CERT_DOMAIN));
 #endif
     ESP_ERROR_CHECK(esp_wifi_sta_enterprise_enable());
     ESP_ERROR_CHECK(esp_wifi_start());

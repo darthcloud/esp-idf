@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2016-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2016-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -12,17 +12,20 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_console.h"
-#include "esp_vfs_cdcacm.h"
-#include "driver/usb_serial_jtag_vfs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/uart.h"
 #include "driver/uart_vfs.h"
 #include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
+#include "esp_private/usb_console.h"
+#include "esp_vfs_cdcacm.h"
 
 #include "console_private.h"
 
-static const char *TAG = "console.repl";
+#if !CONFIG_ESP_CONSOLE_NONE
+static const char *TAG = "console.repl.chip";
+#endif // !CONFIG_ESP_CONSOLE_NONE
 
 #if CONFIG_ESP_CONSOLE_UART_DEFAULT || CONFIG_ESP_CONSOLE_UART_CUSTOM
 static esp_err_t esp_console_repl_uart_delete(esp_console_repl_t *repl);
@@ -81,7 +84,7 @@ esp_err_t esp_console_new_repl_usb_cdc(const esp_console_dev_usb_cdc_config_t *d
 
     /* spawn a single thread to run REPL */
     if (xTaskCreatePinnedToCore(esp_console_repl_task, "console_repl", repl_config->task_stack_size,
-                    cdc_repl, repl_config->task_priority, &cdc_repl->repl_com.task_hdl, repl_config->task_core_id) != pdTRUE) {
+                                cdc_repl, repl_config->task_priority, &cdc_repl->repl_com.task_hdl, repl_config->task_core_id) != pdTRUE) {
         ret = ESP_FAIL;
         goto _exit;
     }
@@ -158,7 +161,7 @@ esp_err_t esp_console_new_repl_usb_serial_jtag(const esp_console_dev_usb_serial_
 
     /* spawn a single thread to run REPL */
     if (xTaskCreatePinnedToCore(esp_console_repl_task, "console_repl", repl_config->task_stack_size,
-                    usb_serial_jtag_repl, repl_config->task_priority, &usb_serial_jtag_repl->repl_com.task_hdl, repl_config->task_core_id) != pdTRUE) {
+                                usb_serial_jtag_repl, repl_config->task_priority, &usb_serial_jtag_repl->repl_com.task_hdl, repl_config->task_core_id) != pdTRUE) {
         ret = ESP_FAIL;
         goto _exit;
     }
@@ -215,7 +218,7 @@ esp_err_t esp_console_new_repl_uart(const esp_console_dev_uart_config_t *dev_con
 #elif SOC_UART_SUPPORT_XTAL_CLK
     uart_sclk_t clk_source = UART_SCLK_XTAL;
 #else
-    #error "No UART clock source is aware of DFS"
+#error "No UART clock source is aware of DFS"
 #endif // SOC_UART_SUPPORT_xxx
     const uart_config_t uart_config = {
         .baud_rate = dev_config->baud_rate,
@@ -260,7 +263,7 @@ esp_err_t esp_console_new_repl_uart(const esp_console_dev_uart_config_t *dev_con
     /* Spawn a single thread to run REPL, we need to pass `uart_repl` to it as
      * it also requires the uart channel. */
     if (xTaskCreatePinnedToCore(esp_console_repl_task, "console_repl", repl_config->task_stack_size,
-                    uart_repl, repl_config->task_priority, &uart_repl->repl_com.task_hdl, repl_config->task_core_id) != pdTRUE) {
+                                uart_repl, repl_config->task_priority, &uart_repl->repl_com.task_hdl, repl_config->task_core_id) != pdTRUE) {
         ret = ESP_FAIL;
         goto _exit;
     }
@@ -292,7 +295,12 @@ static esp_err_t esp_console_repl_uart_delete(esp_console_repl_t *repl)
         ret = ESP_ERR_INVALID_STATE;
         goto _exit;
     }
-    repl_com->state = CONSOLE_REPL_STATE_DEINIT;
+
+    ret = esp_console_common_deinit(&uart_repl->repl_com);
+    if (ret != ESP_OK) {
+        goto _exit;
+    }
+
     esp_console_deinit();
     uart_vfs_dev_use_nonblocking(uart_repl->uart_channel);
     uart_driver_delete(uart_repl->uart_channel);
@@ -314,7 +322,12 @@ static esp_err_t esp_console_repl_usb_cdc_delete(esp_console_repl_t *repl)
         ret = ESP_ERR_INVALID_STATE;
         goto _exit;
     }
-    repl_com->state = CONSOLE_REPL_STATE_DEINIT;
+
+    ret = esp_console_common_deinit(&cdc_repl->repl_com);
+    if (ret != ESP_OK) {
+        goto _exit;
+    }
+
     esp_console_deinit();
     free(cdc_repl);
 _exit:
@@ -334,7 +347,12 @@ static esp_err_t esp_console_repl_usb_serial_jtag_delete(esp_console_repl_t *rep
         ret = ESP_ERR_INVALID_STATE;
         goto _exit;
     }
-    repl_com->state = CONSOLE_REPL_STATE_DEINIT;
+
+    ret = esp_console_common_deinit(&usb_serial_jtag_repl->repl_com);
+    if (ret != ESP_OK) {
+        goto _exit;
+    }
+
     esp_console_deinit();
     usb_serial_jtag_vfs_use_nonblocking();
     usb_serial_jtag_driver_uninstall();

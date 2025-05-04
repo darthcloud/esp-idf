@@ -57,6 +57,18 @@ void vApplicationGetIdleTaskMemory(StaticTask_t **ppxIdleTaskTCBBuffer,
     *pulIdleTaskStackSize = configMINIMAL_STACK_SIZE;
 }
 
+#if ( ( CONFIG_FREERTOS_SMP ) && ( configNUMBER_OF_CORES > 1 ) )
+void vApplicationGetPassiveIdleTaskMemory(StaticTask_t ** ppxIdleTaskTCBBuffer,
+                                          StackType_t ** ppxIdleTaskStackBuffer,
+                                          uint32_t * pulIdleTaskStackSize,
+                                          BaseType_t xPassiveIdleTaskIndex)
+{
+    vApplicationGetIdleTaskMemory(ppxIdleTaskTCBBuffer, ppxIdleTaskStackBuffer, pulIdleTaskStackSize);
+}
+#endif /* ( ( CONFIG_FREERTOS_SMP ) && ( configNUMBER_OF_CORES > 1 ) ) */
+
+#if configUSE_TIMERS
+
 void vApplicationGetTimerTaskMemory(StaticTask_t **ppxTimerTaskTCBBuffer,
                                     StackType_t **ppxTimerTaskStackBuffer,
                                     uint32_t *pulTimerTaskStackSize)
@@ -88,4 +100,6 @@ void vApplicationGetTimerTaskMemory(StaticTask_t **ppxTimerTaskTCBBuffer,
     *ppxTimerTaskStackBuffer = pxStackBufferTemp;
     *pulTimerTaskStackSize = configTIMER_TASK_STACK_DEPTH;
 }
+#endif //configUSE_TIMERS
+
 #endif // configSUPPORT_STATIC_ALLOCATION == 1

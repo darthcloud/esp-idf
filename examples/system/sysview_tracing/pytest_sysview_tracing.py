@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2022 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Unlicense OR CC0-1.0
 import re
 import time
@@ -6,9 +6,9 @@ import time
 import pexpect.fdpexpect
 import pytest
 from pytest_embedded_idf import IdfDut
+from pytest_embedded_idf.utils import idf_parametrize
 
 
-@pytest.mark.esp32
 @pytest.mark.jtag
 @pytest.mark.parametrize(
     'embedded_services',
@@ -17,6 +17,7 @@ from pytest_embedded_idf import IdfDut
     ],
     indirect=True,
 )
+@idf_parametrize('target', ['esp32'], indirect=['target'])
 def test_examples_sysview_tracing(dut: IdfDut) -> None:
     def dut_expect_task_event() -> None:
         dut.expect(re.compile(rb'example: Task\[0x3[0-9A-Fa-f]+\]: received event \d+'), timeout=30)
@@ -34,7 +35,7 @@ def test_examples_sysview_tracing(dut: IdfDut) -> None:
 
     dut.gdb.write('c', non_blocking=True)
     time.sleep(1)  # to avoid EOF file error
-    with open(dut.gdb._logfile) as fr:  # pylint: disable=protected-access
+    with open(dut.gdb._logfile, encoding='utf-8') as fr:  # pylint: disable=protected-access
         gdb_pexpect_proc = pexpect.fdpexpect.fdspawn(fr.fileno())
         gdb_pexpect_proc.expect('Thread 2 "main" hit Breakpoint 1, app_main ()')
 

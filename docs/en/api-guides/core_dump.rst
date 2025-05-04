@@ -16,6 +16,10 @@ Core dump data is saved to a core dump file according to a particular format, se
 Configurations
 --------------
 
+.. note::
+
+    The ``Core dump`` configuration options are available only if the ``espcoredump`` component is included in the build. To include ``Core dump`` into your project, add the ``espcoredump`` component as a dependency in either ``REQUIRES`` or ``PRIV_REQUIRES`` when registering your component with ``idf_component_register``.
+
 Destination
 ^^^^^^^^^^^
 
@@ -56,8 +60,27 @@ Setting this option to 0 bytes will cause the core dump routines to run from the
 
 .. note::
 
-   If a separate stack is used, the recommended stack size should be larger than 800 bytes to ensure that the core dump routines themselves do not cause a stack overflow.
+   If a separate stack is used, the recommended stack size should be larger than 1300 bytes to ensure that the core dump routines themselves do not cause a stack overflow.
 
+
+.. only:: not esp32c5
+
+    Core Dump Memory Regions
+    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+    By default, core dumps typically save CPU registers, tasks data and summary of the panic reason. When the :ref:`CONFIG_ESP_COREDUMP_CAPTURE_DRAM` option is selected, ``.bss`` and ``.data`` sections and ``heap`` data will also be part of the dump.
+
+    For a better debugging experience, it is recommended to dump these sections. However, this will result in a larger coredump file. The required additional storage space may vary based on the amount of DRAM the application uses.
+
+    .. only:: SOC_SPIRAM_SUPPORTED
+
+        .. note::
+
+            Apart from the crashed task's TCB and stack, data located in the external RAM will not be stored in the core dump file, this include variables defined with ``EXT_RAM_BSS_ATTR`` or ``EXT_RAM_NOINIT_ATTR`` attributes, as well as any data stored in the ``extram_bss`` section.
+
+    .. note::
+
+        This feature is only enabled when using the ELF file format.
 
 Core Dump to Flash
 ------------------
@@ -77,7 +100,8 @@ The core dump partition is automatically declared when using the default partiti
 
 .. important::
 
-    If :doc:`../security/flash-encryption` is enabled on the device, please add an ``encrypted`` flag to the core dump partition declaration.
+    If :doc:`../security/flash-encryption` is enabled on the device, please add an ``encrypted`` flag to the core dump partition declaration. Please note that the core dump cannot be read from encrypted partitions using ``idf.py coredump-info`` or ``idf.py coredump-debug`` commands.
+    It is recommended to read the core dump from ESP which will automatically decrypt the partition and send it for analysis, which can be done by running e.g. ``idf.py coredump-info -c <path-to-core-dump>``.
 
     .. code-block:: none
 
@@ -98,6 +122,11 @@ or
     idf.py coredump-debug
 
 
+.. note::
+
+    The ``idf.py coredump-info`` and ``idf.py coredump-debug`` commands are wrappers around the `esp-coredump` tool for easier use in the ESP-IDF environment. For more information see :ref:`core_dump_commands` section.
+
+
 Core Dump to UART
 -----------------
 
@@ -108,8 +137,6 @@ Automatic Decoding
 ^^^^^^^^^^^^^^^^^^
 
 If :ref:`CONFIG_ESP_COREDUMP_DECODE` is set to automatically decode the UART core dump, ESP-IDF monitor will automatically decode the data, translate any function addresses to source code lines, and display it in the monitor. The output to ESP-IDF monitor would resemble the following output:
-
-The :ref:`CONFIG_ESP_COREDUMP_UART_DELAY` allows for an optional delay to be added before the core dump file is output to UART.
 
 .. code-block:: none
 
@@ -159,6 +186,7 @@ The :ref:`CONFIG_ESP_COREDUMP_UART_DELAY` allows for an optional delay to be add
     ===================== ESP32 CORE DUMP END =====================
     ===============================================================
 
+The :ref:`CONFIG_ESP_COREDUMP_UART_DELAY` allows for an optional delay to be added before the core dump file is output to UART.
 
 Manual Decoding
 ^^^^^^^^^^^^^^^
@@ -184,13 +212,23 @@ or
     idf.py coredump-debug -c </path/to/saved/base64/text>
 
 
+.. _core_dump_commands:
+
 Core Dump Commands
 ------------------
 
-ESP-IDF provides special commands to help to retrieve and analyze core dumps:
+ESP-IDF provides special commands to retrieve and analyze core dumps:
 
-* ``idf.py coredump-info`` - prints crashed task's registers, call stack, list of available tasks in the system, memory regions, and contents of memory stored in core dump (TCBs and stacks).
-* ``idf.py coredump-debug`` - creates core dump ELF file and runs GDB debug session with this file. You can examine memory, variables, and task states manually. Note that since not all memory is saved in the core dump, only the values of variables allocated on the stack are meaningful.
+* ``idf.py coredump-info`` - reads coredump from flash and prints crashed task's registers, call stack, list of available tasks in the system, memory regions, and contents of memory stored in core dump (TCBs and stacks).
+* ``idf.py coredump-debug`` - reads coredump from flash, saves it as ELF file and runs a GDB debug session with this file. You can examine memory, variables, and task states manually. Note that since not all memory is saved in the core dump, only the values of variables allocated on the stack are meaningful.
+
+``idf.py coredump-info --help`` and ``idf.py coredump-debug --help`` commands can be used to get more details on usage. For example, they can save the coredump into a file and avoid the need to read it from flash every time these commands are run.
+
+For advanced users who want to pass additional arguments or use custom ELF files, it is possible to use the `esp-coredump <https://github.com/espressif/esp-coredump>`_ tool directly. For more information, use in ESP-IDF environment:
+
+.. code-block:: bash
+
+    esp-coredump --help
 
 
 ROM Functions in Backtraces
@@ -250,13 +288,6 @@ Example
 
    (gdb) p global_var
    $1 = 25 '\031'
-
-
-Running ``idf.py coredump-info`` and ``idf.py coredump-debug``
---------------------------------------------------------------
-
-``idf.py coredump-info --help`` and ``idf.py coredump-debug --help`` commands can be used to get more details on usage.
-
 
 Related Documents
 ^^^^^^^^^^^^^^^^^

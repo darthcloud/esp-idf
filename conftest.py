@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
 # pylint: disable=W0621  # redefined-outer-name
 #
@@ -25,7 +25,7 @@ import re
 import typing as t
 import zipfile
 from copy import deepcopy
-from datetime import datetime
+from urllib.parse import quote
 
 import common_test_methods  # noqa: F401
 import gitlab_api
@@ -39,7 +39,14 @@ from dynamic_pipelines.constants import TEST_RELATED_APPS_DOWNLOAD_URLS_FILENAME
 from idf_ci.app import import_apps_from_txt
 from idf_ci.uploader import AppDownloader, AppUploader
 from idf_ci_utils import IDF_PATH, idf_relpath
-from idf_pytest.constants import DEFAULT_SDKCONFIG, ENV_MARKERS, SPECIAL_MARKERS, TARGET_MARKERS, PytestCase
+from idf_pytest.constants import (
+    DEFAULT_SDKCONFIG,
+    ENV_MARKERS,
+    SPECIAL_MARKERS,
+    TARGET_MARKERS,
+    PytestCase,
+    DEFAULT_LOGDIR,
+)
 from idf_pytest.plugin import IDF_PYTEST_EMBEDDED_KEY, ITEM_PYTEST_CASE_KEY, IdfPytestEmbedded
 from idf_pytest.utils import format_case_id
 from pytest_embedded.plugin import multi_dut_argument, multi_dut_fixture
@@ -55,15 +62,10 @@ def idf_path() -> str:
     return os.path.dirname(__file__)
 
 
-@pytest.fixture(scope='session', autouse=True)
-def session_tempdir() -> str:
-    _tmpdir = os.path.join(
-        os.path.dirname(__file__),
-        'pytest_embedded_log',
-        datetime.now().strftime('%Y-%m-%d_%H-%M-%S'),
-    )
-    os.makedirs(_tmpdir, exist_ok=True)
-    return _tmpdir
+@pytest.fixture(scope='session')
+def session_root_logdir(idf_path: str) -> str:
+    """Session scoped log dir for pytest-embedded"""
+    return idf_path
 
 
 @pytest.fixture
@@ -211,6 +213,9 @@ def build_dir(
         check_dirs = [f'build_{target}_{config}']
     else:
         check_dirs = []
+        build_dir_arg = request.config.getoption('build_dir', None)
+        if build_dir_arg:
+            check_dirs.append(build_dir_arg)
         if target is not None and config is not None:
             check_dirs.append(f'build_{target}_{config}')
         if target is not None:
@@ -253,6 +258,34 @@ def set_test_case_name(request: FixtureRequest, test_case_name: str) -> None:
     request.node.funcargs['test_case_name'] = test_case_name
 
 
+@pytest.fixture(autouse=True)
+def set_dut_log_url(record_xml_attribute: t.Callable[[str, object], None], _pexpect_logfile: str) -> t.Generator:
+    # Record the "dut_log_url" attribute in the XML report once test execution finished
+    yield
+
+    if not isinstance(_pexpect_logfile, str):
+        record_xml_attribute('dut_log_url', 'No log URL found')
+        return
+
+    ci_pages_url = os.getenv('CI_PAGES_URL')
+    logdir_pattern = re.compile(rf'({DEFAULT_LOGDIR}/.*)')
+    match = logdir_pattern.search(_pexpect_logfile)
+
+    if not match:
+        record_xml_attribute('dut_log_url', 'No log URL found')
+        return
+
+    if not ci_pages_url:
+        record_xml_attribute('dut_log_url', _pexpect_logfile)
+        return
+
+    job_id = os.getenv('CI_JOB_ID', '0')
+    modified_ci_pages_url = ci_pages_url.replace('esp-idf', '-/esp-idf')
+    log_url = f'{modified_ci_pages_url}/-/jobs/{job_id}/artifacts/{match.group(1)}'
+
+    record_xml_attribute('dut_log_url', log_url)
+
+
 ######################
 # Log Util Functions #
 ######################
@@ -289,9 +322,9 @@ def check_performance(idf_path: str) -> t.Callable[[str, float, str], None]:
         """
 
         def _find_perf_item(operator: str, path: str) -> float:
-            with open(path) as f:
+            with open(path, encoding='utf-8') as f:
                 data = f.read()
-            match = re.search(fr'#define\s+IDF_PERFORMANCE_{operator}_{item.upper()}\s+([\d.]+)', data)
+            match = re.search(rf'#define\s+IDF_PERFORMANCE_{operator}_{item.upper()}\s+([\d.]+)', data)
             return float(match.group(1))  # type: ignore
 
         def _check_perf(operator: str, standard_value: float) -> None:
@@ -330,16 +363,18 @@ def check_performance(idf_path: str) -> t.Callable[[str, float, str], None]:
 
 
 @pytest.fixture
-def log_minimum_free_heap_size(dut: IdfDut, config: str) -> t.Callable[..., None]:
+def log_minimum_free_heap_size(dut: IdfDut, config: str, idf_path: str) -> t.Callable[..., None]:
     def real_func() -> None:
         res = dut.expect(r'Minimum free heap size: (\d+) bytes')
         logging.info(
             '\n------ heap size info ------\n'
+            '[app_path] {}\n'
             '[app_name] {}\n'
             '[config_name] {}\n'
             '[target] {}\n'
             '[minimum_free_heap_size] {} Bytes\n'
             '------ heap size end ------'.format(
+                dut.app.app_path.replace(idf_path, '').lstrip('/\\'),
                 os.path.basename(dut.app.app_path),
                 config,
                 dut.target,
@@ -391,6 +426,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: Config) -> None:
+    from pytest_embedded_idf.utils import supported_targets, preview_targets
+    from idf_pytest.constants import SUPPORTED_TARGETS, PREVIEW_TARGETS
+
+    supported_targets.set(SUPPORTED_TARGETS)
+    preview_targets.set(PREVIEW_TARGETS)
+
     # cli option "--target"
     target = [_t.strip().lower() for _t in (config.getoption('target', '') or '').split(',') if _t.strip()]
 
@@ -436,6 +477,7 @@ def pytest_configure(config: Config) -> None:
 
     if '--collect-only' not in config.invocation_params.args:
         config.stash[IDF_PYTEST_EMBEDDED_KEY] = IdfPytestEmbedded(
+            config_name=config.getoption('sdkconfig'),
             target=target,
             apps=apps,
         )
@@ -447,3 +489,42 @@ def pytest_unconfigure(config: Config) -> None:
     if _pytest_embedded:
         del config.stash[IDF_PYTEST_EMBEDDED_KEY]
         config.pluginmanager.unregister(_pytest_embedded)
+
+
+dut_artifacts_url = []
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):  # type: ignore
+    outcome = yield
+    report = outcome.get_result()
+    report.sections = []
+    if report.failed:
+        _dut = item.funcargs.get('dut')
+        if not _dut:
+            return
+
+        job_id = os.getenv('CI_JOB_ID', 0)
+        url = os.getenv('CI_PAGES_URL', '').replace('esp-idf', '-/esp-idf')
+        template = f'{url}/-/jobs/{job_id}/artifacts/{DEFAULT_LOGDIR}/{{}}'
+        logs_files = []
+
+        def get_path(x: str) -> str:
+            return x.split(f'{DEFAULT_LOGDIR}/', 1)[1]
+
+        if isinstance(_dut, list):
+            logs_files.extend([template.format(get_path(d.logfile)) for d in _dut])
+            dut_artifacts_url.append('{}:'.format(_dut[0].test_case_name))
+        else:
+            logs_files.append(template.format(get_path(_dut.logfile)))
+            dut_artifacts_url.append('{}:'.format(_dut.test_case_name))
+
+        for file in logs_files:
+            dut_artifacts_url.append('    - {}'.format(quote(file, safe=':/')))
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):  # type: ignore
+    if dut_artifacts_url:
+        terminalreporter.ensure_newline()
+        terminalreporter.section('Failed Test Artifacts URL', sep='-', red=True, bold=True)
+        terminalreporter.line('\n'.join(dut_artifacts_url))

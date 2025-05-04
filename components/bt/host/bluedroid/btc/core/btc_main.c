@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -60,6 +60,7 @@ static void btc_init_bluetooth(void)
 #if (BLE_INCLUDED == TRUE)
     //load the ble local key which has been stored in the flash
     btc_dm_load_ble_local_keys();
+    bta_dm_co_security_param_init();
 #endif  ///BLE_INCLUDED == TRUE
 #endif /* #if (SMP_INCLUDED) */
 #if BTA_DYNAMIC_MEMORY
@@ -121,6 +122,11 @@ uint32_t btc_get_ble_status(void)
 {
     uint32_t status = BTC_BLE_STATUS_IDLE;
 
+    if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED) {
+        BTC_TRACE_ERROR("%s Bluedroid not enabled", __func__);
+        return status;
+    }
+
     #if (BLE_INCLUDED == TRUE)
     // Number of active advertising
     extern uint8_t btm_ble_adv_active_count(void);
@@ -140,31 +146,53 @@ uint32_t btc_get_ble_status(void)
         status |= BIT(BTC_BLE_STATUS_CONN);
     }
 
+    // Number of active ACL connection
+    extern uint8_t btm_ble_acl_active_count(void);
+    if (btm_ble_acl_active_count()) {
+        status |= BIT(BTC_BLE_STATUS_CONN);
+    }
+
+    // Number of active L2C plcb
+    extern uint8_t l2cu_ble_plcb_active_count(void);
+    if (l2cu_ble_plcb_active_count()) {
+        status |= BIT(BTC_BLE_STATUS_CONN);
+    }
+
+    // Address resolve status
+    extern uint8_t btm_get_ble_addr_resolve_disable_status(void);
+    if (btm_get_ble_addr_resolve_disable_status()) {
+        status |= BIT(BTC_BLE_STATUS_ADDR_RESOLVE_DISABLE);
+    }
+
     #if (SMP_INCLUDED == TRUE)
+    // Number of recorded devices
+    extern uint8_t btm_ble_sec_dev_active_count(void);
+    if (btm_ble_sec_dev_active_count()) {
+        status |= BIT(BTC_BLE_STATUS_KEYS);
+    }
+
     // Number of saved bonded devices
     if (btc_storage_get_num_ble_bond_devices()) {
         status |= BIT(BTC_BLE_STATUS_BOND);
     }
     #endif
+
+    #if (BLE_PRIVACY_SPT == TRUE)
+    // Privacy enabled
+    extern uint8_t btm_ble_privacy_is_enabled(void);
+    if (btm_ble_privacy_is_enabled()) {
+        status |= BIT(BTC_BLE_STATUS_PRIVACY);
+    }
+    #endif
     #endif
 
-    // Number of recorded devices
-    extern uint8_t btdm_sec_dev_active_count(void);
-    if (btdm_sec_dev_active_count()) {
-        status |= BIT(BTC_BLE_STATUS_DEV);
+    #if (BLE_50_FEATURE_SUPPORT == TRUE)
+    // Number of active extended advertsing
+    extern uint8_t btm_ble_ext_adv_active_count(void);
+    if (btm_ble_ext_adv_active_count()) {
+        status |= BIT(BTC_BLE_STATUS_EXT_ADV);
     }
-
-    // Number of active ACL connection
-    extern uint8_t btm_acl_active_count(void);
-    if (btm_acl_active_count()) {
-        status |= BIT(BTC_BLE_STATUS_CONN);
-    }
-
-    // Number of active L2C plcb
-    extern uint8_t l2cu_plcb_active_count(void);
-    if (l2cu_plcb_active_count()) {
-        status |= BIT(BTC_BLE_STATUS_CONN);
-    }
+    #endif
 
     #if (GATTC_INCLUDED == TRUE)
     // Number of registered GATTC APP

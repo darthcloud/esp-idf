@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2010-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2010-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -80,7 +80,7 @@ struct spi_slave_transaction_t {
 };
 
 /**
- * @brief Initialize a SPI bus as a slave interface
+ * @brief Initialize a SPI bus as a slave interface and enable it by default
  *
  * @warning SPI0/1 is not supported
  *
@@ -120,6 +120,30 @@ esp_err_t spi_slave_initialize(spi_host_device_t host, const spi_bus_config_t *b
 esp_err_t spi_slave_free(spi_host_device_t host);
 
 /**
+ * @brief Enable the spi slave function for an initialized spi host
+ * @note No need to call this function additionally after `spi_slave_initialize`,
+ *       because it has been enabled already during the initialization.
+ *
+ * @param host SPI peripheral to be enabled
+ * @return
+ *         - ESP_OK                 On success
+ *         - ESP_ERR_INVALID_ARG    Unsupported host
+ *         - ESP_ERR_INVALID_STATE  Peripheral already enabled
+ */
+esp_err_t spi_slave_enable(spi_host_device_t host);
+
+/**
+ * @brief Disable the spi slave function for an initialized spi host
+ *
+ * @param host SPI peripheral to be disabled
+ * @return
+ *         - ESP_OK                 On success
+ *         - ESP_ERR_INVALID_ARG    Unsupported host
+ *         - ESP_ERR_INVALID_STATE  Peripheral already disabled
+ */
+esp_err_t spi_slave_disable(spi_host_device_t host);
+
+/**
  * @brief Queue a SPI transaction for execution
  *
  * @note On esp32, if trans length not WORD aligned, the rx buffer last word memory will still overwritten by DMA HW
@@ -149,9 +173,9 @@ esp_err_t spi_slave_queue_trans(spi_host_device_t host, const spi_slave_transact
  * @brief Get the result of a SPI transaction queued earlier
  *
  * This routine will wait until a transaction to the given device (queued earlier with
- * spi_slave_queue_trans) has succesfully completed. It will then return the description of the
+ * spi_slave_queue_trans) has successfully completed. It will then return the description of the
  * completed transaction so software can inspect the result and e.g. free the memory or
- * re-use the buffers.
+ * reuse the buffers.
  *
  * It is mandatory to eventually use this function for any transaction queued by ``spi_slave_queue_trans``.
  *

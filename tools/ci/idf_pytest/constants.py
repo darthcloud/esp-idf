@@ -1,10 +1,12 @@
-# SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
 """
 Pytest Related Constants. Don't import third-party packages here.
 """
+
 import os
 import typing as t
+import warnings
 from dataclasses import dataclass
 from enum import Enum
 from functools import cached_property
@@ -15,9 +17,21 @@ from idf_ci_utils import IDF_PATH
 from idf_ci_utils import idf_relpath
 from pytest_embedded.utils import to_list
 
-SUPPORTED_TARGETS = ['esp32', 'esp32s2', 'esp32c3', 'esp32s3', 'esp32c2', 'esp32c6', 'esp32h2', 'esp32p4']
+SUPPORTED_TARGETS = [
+    'esp32',
+    'esp32s2',
+    'esp32c3',
+    'esp32s3',
+    'esp32c2',
+    'esp32c6',
+    'esp32h2',
+    'esp32p4',
+    'esp32c5',
+    'esp32c61',
+]
 PREVIEW_TARGETS: t.List[str] = []  # this PREVIEW_TARGETS excludes 'linux' target
 DEFAULT_SDKCONFIG = 'default'
+DEFAULT_LOGDIR = 'pytest-embedded'
 
 TARGET_MARKERS = {
     'esp32': 'support esp32 target',
@@ -25,25 +39,31 @@ TARGET_MARKERS = {
     'esp32s3': 'support esp32s3 target',
     'esp32c3': 'support esp32c3 target',
     'esp32c2': 'support esp32c2 target',
+    'esp32c5': 'support esp32c5 target',
     'esp32c6': 'support esp32c6 target',
     'esp32h2': 'support esp32h2 target',
+    'esp32h4': 'support esp32h4 target',  # as preview
+    'esp32h21': 'support esp32h21 target',  # as preview
     'esp32p4': 'support esp32p4 target',
+    'esp32c61': 'support esp32c61 target',
     'linux': 'support linux target',
 }
 
 SPECIAL_MARKERS = {
-    'supported_targets': "support all officially announced supported targets ('esp32', 'esp32s2', 'esp32c3', 'esp32s3', 'esp32c2', 'esp32c6')",
+    'supported_targets': 'support all officially announced supported targets, refer to `SUPPORTED_TARGETS`',
     'preview_targets': "support all preview targets ('none')",
     'all_targets': 'support all targets, including supported ones and preview ones',
     'temp_skip_ci': 'temp skip tests for specified targets only in ci',
     'temp_skip': 'temp skip tests for specified targets both in ci and locally',
     'nightly_run': 'tests should be executed as part of the nightly trigger pipeline',
     'host_test': 'tests which should not be built at the build stage, and instead built in host_test stage',
+    'require_elf': 'tests which require elf file',
 }
 
 ENV_MARKERS = {
     # special markers
     'qemu': 'build and test using qemu, not real target',
+    'macos_shell': 'tests should be run on macos hosts',
     # single-dut markers
     'generic': 'tests should be run on generic runners',
     'flash_suspend': 'support flash suspend feature',
@@ -57,19 +77,20 @@ ENV_MARKERS = {
     'eth_dm9051': 'SPI Ethernet module with two DM9051',
     'quad_psram': 'runners with quad psram',
     'octal_psram': 'runners with octal psram',
-    'usb_host': 'usb host runners',
     'usb_host_flash_disk': 'usb host runners with USB flash disk attached',
     'usb_device': 'usb device runners',
     'ethernet_ota': 'ethernet OTA runners',
     'flash_encryption': 'Flash Encryption runners',
     'flash_encryption_f4r8': 'Flash Encryption runners with 4-line flash and 8-line psram',
     'flash_encryption_f8r8': 'Flash Encryption runners with 8-line flash and 8-line psram',
+    'flash_encryption_ota': 'Flash Encryption runners with ethernet OTA support with 4mb flash size',
     'flash_multi': 'Multiple flash chips tests',
     'psram': 'Chip has 4-line psram',
     'ir_transceiver': 'runners with a pair of IR transmitter and receiver',
     'twai_transceiver': 'runners with a TWAI PHY transceiver',
     'flash_encryption_wifi_high_traffic': 'Flash Encryption runners with wifi high traffic support',
     'ethernet': 'ethernet runner',
+    'ethernet_stress': 'ethernet runner with stress test',
     'ethernet_flash_8m': 'ethernet runner with 8mb flash',
     'ethernet_router': 'both the runner and dut connect to the same router through ethernet NIC',
     'ethernet_vlan': 'ethernet runner GARM-32-SH-1-R16S5N3',
@@ -78,7 +99,7 @@ ENV_MARKERS = {
     'wifi_high_traffic': 'wifi high traffic runners',
     'wifi_wlan': 'wifi runner with a wireless NIC',
     'wifi_iperf': 'the AP and ESP dut were placed in a shielded box - for iperf test',
-    'Example_ShieldBox': 'multiple shielded APs connected to shielded ESP DUT via RF cable with programmable attenuator',
+    'Example_ShieldBox': 'multiple shielded APs connected to shielded ESP DUT via RF cable with programmable attenuator',  # noqa E501
     'xtal_26mhz': 'runner with 26MHz xtal on board',
     'xtal_40mhz': 'runner with 40MHz xtal on board',
     'external_flash': 'external flash memory connected via VSPI (FSPI)',
@@ -89,6 +110,7 @@ ENV_MARKERS = {
     'MSPI_F8R8': 'runner with Octal Flash and Octal PSRAM',
     'MSPI_F4R8': 'runner with Quad Flash and Octal PSRAM',
     'MSPI_F4R4': 'runner with Quad Flash and Quad PSRAM',
+    'flash_120m': 'runner with 120M supported Flash',
     'jtag': 'runner where the chip is accessible through JTAG as well',
     'usb_serial_jtag': 'runner where the chip is accessible through builtin JTAG as well',
     'adc': 'ADC related tests should run on adc runners',
@@ -101,6 +123,9 @@ ENV_MARKERS = {
     'nvs_encr_hmac': 'Runner with test HMAC key programmed in efuse',
     'i2c_oled': 'Runner with ssd1306 I2C oled connected',
     'httpbin': 'runner for tests that need to access the httpbin service',
+    'flash_4mb': 'C2 runners with 4 MB flash',
+    'jtag_re_enable': 'Runner to re-enable jtag which is softly disabled by burning bit SOFT_DIS_JTAG on eFuse',
+    'es8311': 'Development board that carries es8311 codec',
     # multi-dut markers
     'multi_dut_modbus_rs485': 'a pair of runners connected by RS485 bus',
     'ieee802154': 'ieee802154 related tests should run on ieee802154 runners.',
@@ -115,34 +140,45 @@ ENV_MARKERS = {
     'sdio_multidev_32_c6': 'Test sdio multi board, esp32+esp32c6',
     'usj_device': 'Test usb_serial_jtag and usb_serial_jtag is used as serial only (not console)',
     'twai_std': 'twai runner with all twai supported targets connect to usb-can adapter',
+    'lp_i2s': 'lp_i2s runner tested with hp_i2s',
+    'ram_app': 'ram_app runners',
+    'esp32c3eco7': 'esp32c3 major version(v1.1) chips',
+    'esp32c2eco4': 'esp32c2 major version(v2.0) chips',
 }
+
+# by default the timeout is 1h, for some special cases we need to extend it
+TIMEOUT_4H_MARKERS = [
+    'ethernet_stress',
+]
 
 DEFAULT_CONFIG_RULES_STR = ['sdkconfig.ci=default', 'sdkconfig.ci.*=', '=default']
 DEFAULT_IGNORE_WARNING_FILEPATH = os.path.join(IDF_PATH, 'tools', 'ci', 'ignore_build_warnings.txt')
 DEFAULT_BUILD_TEST_RULES_FILEPATH = os.path.join(IDF_PATH, '.gitlab', 'ci', 'default-build-test-rules.yml')
+DEFAULT_FULL_BUILD_TEST_COMPONENTS = [
+    'cxx',
+    'esp_common',
+    'esp_hw_support',
+    'esp_rom',
+    'esp_system',
+    'esp_timer',
+    'freertos',
+    'hal',
+    'heap',
+    'log',
+    'newlib',
+    'riscv',
+    'soc',
+    'xtensa',
+]
 DEFAULT_FULL_BUILD_TEST_FILEPATTERNS = [
     # tools
     'tools/cmake/**/*',
     'tools/tools.json',
     # ci
     'tools/ci/ignore_build_warnings.txt',
-    # components
-    'components/cxx/**/*',
-    'components/esp_common/**/*',
-    'components/esp_hw_support/**/*',
-    'components/esp_rom/**/*',
-    'components/esp_system/**/*',
-    'components/esp_timer/**/*',
-    'components/freertos/**/*',
-    'components/hal/**/*',
-    'components/heap/**/*',
-    'components/log/**/*',
-    'components/newlib/**/*',
-    'components/riscv/**/*',
-    'components/soc/**/*',
-    'components/xtensa/**/*',
 ]
 DEFAULT_BUILD_LOG_FILENAME = 'build_log.txt'
+DEFAULT_SIZE_JSON_FILENAME = 'size.json'
 
 
 class CollectMode(str, Enum):
@@ -156,6 +192,7 @@ class PytestApp:
     """
     Pytest App with relative path to IDF_PATH
     """
+
     def __init__(self, path: str, target: str, config: str) -> None:
         self.path = idf_relpath(path)
         self.target = target
@@ -174,6 +211,7 @@ class PytestCase:
     apps: t.List[PytestApp]
 
     item: Function
+    multi_dut_without_param: bool
 
     def __hash__(self) -> int:
         return hash((self.path, self.name, self.apps, self.all_markers))
@@ -188,7 +226,24 @@ class PytestCase:
 
     @cached_property
     def targets(self) -> t.List[str]:
-        return [app.target for app in self.apps]
+        if not self.multi_dut_without_param:
+            return [app.target for app in self.apps]
+
+        # multi-dut test cases without parametrize
+        skip = True
+        for _t in [app.target for app in self.apps]:
+            if _t in self.target_markers:
+                skip = False
+                warnings.warn(
+                    f'`pytest.mark.[TARGET]` defined in parametrize for multi-dut test cases is deprecated. '  # noqa: W604
+                    f'Please use parametrize instead for test case {self.item.nodeid}'
+                )
+                break
+
+        if not skip:
+            return [app.target for app in self.apps]
+
+        return [''] * len(self.apps)  # this will help to filter these cases out later
 
     @cached_property
     def is_single_dut_test_case(self) -> bool:
@@ -204,7 +259,7 @@ class PytestCase:
         return {marker.name for marker in self.item.iter_markers()}
 
     @property
-    def target_markers(self) -> t.Set[str]:
+    def skip_targets(self) -> t.Set[str]:
         def _get_temp_markers_disabled_targets(marker_name: str) -> t.Set[str]:
             temp_marker = self.item.get_closest_marker(marker_name)
 
@@ -214,7 +269,7 @@ class PytestCase:
             # temp markers should always use keyword arguments `targets` and `reason`
             if not temp_marker.kwargs.get('targets') or not temp_marker.kwargs.get('reason'):
                 raise ValueError(
-                    f'`{marker_name}` should always use keyword arguments `targets` and `reason`. '
+                    f'`{marker_name}` should always use keyword arguments `targets` and `reason`. '  # noqa: W604
                     f'For example: '
                     f'`@pytest.mark.{marker_name}(targets=["esp32"], reason="IDF-xxxx, will fix it ASAP")`'
                 )
@@ -226,11 +281,15 @@ class PytestCase:
 
         # in CI we skip the union of `temp_skip` and `temp_skip_ci`
         if os.getenv('CI_JOB_ID'):
-            skip_targets = temp_skip_ci_targets.union(temp_skip_targets)
+            _skip_targets = temp_skip_ci_targets.union(temp_skip_targets)
         else:  # we use `temp_skip` locally
-            skip_targets = temp_skip_targets
+            _skip_targets = temp_skip_targets
 
-        return {marker for marker in self.all_markers if marker in TARGET_MARKERS} - skip_targets
+        return _skip_targets
+
+    @property
+    def target_markers(self) -> t.Set[str]:
+        return {marker for marker in self.all_markers if marker in TARGET_MARKERS} - self.skip_targets
 
     @property
     def env_markers(self) -> t.Set[str]:
@@ -251,8 +310,13 @@ class PytestCase:
         if 'jtag' in self.env_markers or 'usb_serial_jtag' in self.env_markers:
             return True
 
-        if any('panic' in Path(app.path).parts for app in self.apps):
+        cases_need_elf = ['panic', 'gdbstub_runtime']
+        if 'require_elf' in SPECIAL_MARKERS:
             return True
+
+        for case in cases_need_elf:
+            if any(case in Path(app.path).parts for app in self.apps):
+                return True
 
         return False
 
@@ -273,7 +337,7 @@ class PytestCase:
                 bin_found[i] = 1
 
         if sum(bin_found) == 0:
-            msg = f'Skip test case {self.name} because all following binaries are not listed in the app lists: '
+            msg = f'Skip test case {self.name} because all following binaries are not listed in the app lists: '  # noqa: E713
             for app in self.apps:
                 msg += f'\n - {app.build_dir}'
 
@@ -284,7 +348,7 @@ class PytestCase:
             return None
 
         # some found, some not, looks suspicious
-        msg = f'Found some binaries of test case {self.name} are not listed in the app lists.'
+        msg = f'Found some binaries of test case {self.name} are not listed in the app lists.'  # noqa: E713
         for i, app in enumerate(self.apps):
             if bin_found[i] == 0:
                 msg += f'\n - {app.build_dir}'

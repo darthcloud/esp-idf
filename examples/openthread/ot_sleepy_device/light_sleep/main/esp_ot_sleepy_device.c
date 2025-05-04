@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: CC0-1.0
  *
@@ -20,6 +20,8 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_openthread.h"
+#include "esp_openthread_cli.h"
+#include "esp_openthread_lock.h"
 #include "esp_openthread_netif_glue.h"
 #include "esp_ot_sleepy_device_config.h"
 #include "esp_vfs_eventfd.h"
@@ -27,16 +29,15 @@
 #include "nvs_flash.h"
 #include "openthread/logging.h"
 #include "openthread/thread.h"
-
 #if CONFIG_ESP_SLEEP_DEBUG
-#include "esp_timer.h"
-#include "esp_sleep.h"
 #include "esp_private/esp_pmu.h"
 #include "esp_private/esp_sleep_internal.h"
 #endif
 
 #ifdef CONFIG_PM_ENABLE
 #include "esp_pm.h"
+#include "soc/rtc.h"
+#include "esp_sleep.h"
 #endif
 
 #if !SOC_IEEE802154_SUPPORTED
@@ -45,6 +46,10 @@
 
 #define TAG "ot_esp_power_save"
 
+static esp_pm_lock_handle_t s_cli_pm_lock = NULL;
+TimerHandle_t xTimer;
+
+#if CONFIG_OPENTHREAD_AUTO_START
 static void create_config_network(otInstance *instance)
 {
     otLinkModeConfig linkMode = { 0 };
@@ -62,7 +67,41 @@ static void create_config_network(otInstance *instance)
         ESP_LOGE(TAG, "Failed to set OpenThread linkmode.");
         abort();
     }
-    ESP_ERROR_CHECK(esp_openthread_auto_start(NULL));
+
+    otOperationalDatasetTlvs dataset;
+    otError error = otDatasetGetActiveTlvs(esp_openthread_get_instance(), &dataset);
+    ESP_ERROR_CHECK(esp_openthread_auto_start((error == OT_ERROR_NONE) ? &dataset : NULL));
+}
+#endif // CONFIG_OPENTHREAD_AUTO_START
+
+static esp_err_t esp_openthread_sleep_device_init(void)
+{
+    esp_err_t ret = ESP_OK;
+
+    ret = esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "otcli", &s_cli_pm_lock);
+    if (ret == ESP_OK) {
+        esp_pm_lock_acquire(s_cli_pm_lock);
+        ESP_LOGI(TAG, "Successfully created CLI pm lock");
+    } else {
+        if (s_cli_pm_lock != NULL) {
+            esp_pm_lock_delete(s_cli_pm_lock);
+            s_cli_pm_lock = NULL;
+        }
+        ESP_LOGI(TAG, " Failed to create CLI pm lock");
+    }
+    return ret;
+}
+
+static void process_state_change(otChangedFlags flags, void* context)
+{
+    otDeviceRole ot_device_role = otThreadGetDeviceRole(esp_openthread_get_instance());
+    if(ot_device_role == OT_DEVICE_ROLE_CHILD) {
+        if (s_cli_pm_lock != NULL) {
+            esp_pm_lock_release(s_cli_pm_lock);
+            esp_pm_lock_delete(s_cli_pm_lock);
+            s_cli_pm_lock = NULL;
+        }
+    }
 }
 
 static esp_netif_t *init_openthread_netif(const esp_openthread_platform_config_t *config)
@@ -78,8 +117,10 @@ static esp_netif_t *init_openthread_netif(const esp_openthread_platform_config_t
 #if CONFIG_ESP_SLEEP_DEBUG
 static esp_sleep_context_t s_sleep_ctx;
 
-static void print_sleep_flag(void *arg)
+void vTimerCallback( TimerHandle_t xTimer )
 {
+    assert(xTimer);
+
     ESP_LOGD(TAG, "sleep_flags %lu", s_sleep_ctx.sleep_flags);
     ESP_LOGD(TAG, "PMU_SLEEP_PD_TOP: %s", (s_sleep_ctx.sleep_flags & PMU_SLEEP_PD_TOP) ? "True":"False");
     ESP_LOGD(TAG, "PMU_SLEEP_PD_MODEM: %s", (s_sleep_ctx.sleep_flags & PMU_SLEEP_PD_MODEM) ? "True":"False");
@@ -88,6 +129,7 @@ static void print_sleep_flag(void *arg)
 
 static void ot_task_worker(void *aContext)
 {
+    otError ret;
     esp_openthread_platform_config_t config = {
         .radio_config = ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG(),
         .host_config = ESP_OPENTHREAD_DEFAULT_HOST_CONFIG(),
@@ -97,32 +139,38 @@ static void ot_task_worker(void *aContext)
     // Initialize the OpenThread stack
     ESP_ERROR_CHECK(esp_openthread_init(&config));
 
+    esp_openthread_lock_acquire(portMAX_DELAY);
+    ret = otSetStateChangedCallback(esp_openthread_get_instance(), process_state_change, esp_openthread_get_instance());
+    esp_openthread_lock_release();
+    if(ret != OT_ERROR_NONE) {
+        ESP_LOGE(TAG, "Failed to set state changed callback");
+    }
 #if CONFIG_OPENTHREAD_LOG_LEVEL_DYNAMIC
     // The OpenThread log level directly matches ESP log level
     (void)otLoggingSetLevel(CONFIG_LOG_DEFAULT_LEVEL);
+#endif
+    // Initialize the OpenThread cli
+#if CONFIG_OPENTHREAD_CLI
+    esp_openthread_cli_init();
 #endif
     esp_netif_t *openthread_netif;
     // Initialize the esp_netif bindings
     openthread_netif = init_openthread_netif(&config);
     esp_netif_set_default_netif(openthread_netif);
-
+#if CONFIG_OPENTHREAD_AUTO_START
     create_config_network(esp_openthread_get_instance());
+#endif // CONFIG_OPENTHREAD_AUTO_START
 
+#if CONFIG_OPENTHREAD_CLI
+    esp_openthread_cli_create_task();
+#endif
 #if CONFIG_ESP_SLEEP_DEBUG
     esp_sleep_set_sleep_context(&s_sleep_ctx);
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
 
-    // create a timer to print the status of sleepy device
-    int periods = 2000;
-    const esp_timer_create_args_t timer_args = {
-            .name = "print_sleep_flag",
-            .arg  = NULL,
-            .callback = &print_sleep_flag,
-            .skip_unhandled_events = true,
-    };
-    esp_timer_handle_t periodic_timer;
-    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &periodic_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, periods * 1000));
+    // Use freeRTOS timer so that it is lower priority than OpenThread
+    xTimer = xTimerCreate("print_sleep_flag", pdMS_TO_TICKS(2000), pdTRUE, NULL, vTimerCallback);
+    xTimerStart( xTimer, 0 );
 #endif
 
     // Run the main loop
@@ -151,6 +199,13 @@ static esp_err_t ot_power_save_init(void)
     };
 
     rc = esp_pm_configure(&pm_config);
+
+    soc_rtc_slow_clk_src_t slow_clk_src = rtc_clk_slow_src_get();
+    if (slow_clk_src != SOC_RTC_SLOW_CLK_SRC_XTAL32K) {
+        ESP_LOGW(TAG, "32k XTAL not in use");
+    } else {
+        ESP_LOGI(TAG, "32k XTAL in use");
+    }
 #endif
     return rc;
 }
@@ -170,6 +225,6 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_vfs_eventfd_register(&eventfd_config));
     ESP_ERROR_CHECK(ot_power_save_init());
-
+    ESP_ERROR_CHECK(esp_openthread_sleep_device_init());
     xTaskCreate(ot_task_worker, "ot_power_save_main", 4096, NULL, 5, NULL);
 }

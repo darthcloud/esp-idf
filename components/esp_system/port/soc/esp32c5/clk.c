@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -15,16 +15,24 @@
 #include "esp32c5/rom/ets_sys.h"
 #include "esp32c5/rom/uart.h"
 #include "soc/soc.h"
+#include "soc/soc_caps.h"
 #include "soc/rtc.h"
 #include "soc/rtc_periph.h"
 #include "soc/i2s_reg.h"
+#include "soc/chip_revision.h"
 #include "esp_cpu.h"
+#include "hal/efuse_hal.h"
 #include "hal/wdt_hal.h"
+#include "hal/clk_tree_ll.h"
+#if SOC_MODEM_CLOCK_SUPPORTED
 #include "hal/modem_lpcon_ll.h"
+#endif
+#include "esp_private/esp_sleep_internal.h"
 #include "esp_private/esp_modem_clock.h"
 #include "esp_private/periph_ctrl.h"
 #include "esp_private/esp_clk.h"
 #include "esp_private/esp_pmu.h"
+#include "esp_private/ocode_init.h"
 #include "esp_rom_uart.h"
 #include "esp_rom_sys.h"
 
@@ -40,19 +48,31 @@ static void select_rtc_slow_clk(soc_rtc_slow_clk_src_t rtc_slow_clk_src);
 
 static const char *TAG = "clk";
 
-// TODO: [ESP32C5] IDF-8642
+void esp_rtc_init(void)
+{
+#if !CONFIG_IDF_ENV_FPGA
+    pmu_init();
+    if (esp_rom_get_reset_reason(0) == RESET_REASON_CHIP_POWER_ON) {
+        esp_ocode_calib_init();
+    }
+#endif
+}
+
 __attribute__((weak)) void esp_clk_init(void)
 {
-#if SOC_PMU_SUPPORTED
-    pmu_init();
-#endif
-
-    assert((rtc_clk_xtal_freq_get() == SOC_XTAL_FREQ_40M) || (rtc_clk_xtal_freq_get() == SOC_XTAL_FREQ_48M));
-
-    modem_lpcon_ll_set_pwr_tick_target(&MODEM_LPCON, rtc_clk_xtal_freq_get() - 1);
+#if !CONFIG_IDF_ENV_FPGA
+    assert((rtc_clk_xtal_freq_get() == SOC_XTAL_FREQ_48M) || (rtc_clk_xtal_freq_get() == SOC_XTAL_FREQ_40M));
 
     rtc_clk_8m_enable(true);
+#if CONFIG_RTC_FAST_CLK_SRC_RC_FAST
     rtc_clk_fast_src_set(SOC_RTC_FAST_CLK_SRC_RC_FAST);
+#elif CONFIG_RTC_FAST_CLK_SRC_XTAL
+    rtc_clk_fast_src_set(SOC_RTC_FAST_CLK_SRC_XTAL);
+    esp_sleep_sub_mode_config(ESP_SLEEP_RTC_FAST_USE_XTAL_MODE, true);
+#else
+#error "No RTC fast clock source configured"
+#endif
+#endif //!CONFIG_IDF_ENV_FPGA
 
 #ifdef CONFIG_BOOTLOADER_WDT_ENABLE
     // WDT uses a SLOW_CLK clock source. After a function select_rtc_slow_clk a frequency of this source can changed.
@@ -69,14 +89,13 @@ __attribute__((weak)) void esp_clk_init(void)
     wdt_hal_write_protect_enable(&rtc_wdt_ctx);
 #endif
 
+    modem_clock_deselect_all_module_lp_clock_source();
 #if defined(CONFIG_RTC_CLK_SRC_EXT_CRYS)
     select_rtc_slow_clk(SOC_RTC_SLOW_CLK_SRC_XTAL32K);
 #elif defined(CONFIG_RTC_CLK_SRC_EXT_OSC)
     select_rtc_slow_clk(SOC_RTC_SLOW_CLK_SRC_OSC_SLOW);
-#elif defined(CONFIG_RTC_CLK_SRC_INT_RC32K)
-    select_rtc_slow_clk(SOC_RTC_SLOW_CLK_SRC_RC32K);
 #else
-    abort();
+    select_rtc_slow_clk(SOC_RTC_SLOW_CLK_SRC_RC_SLOW);
 #endif
 
 #ifdef CONFIG_BOOTLOADER_WDT_ENABLE
@@ -98,7 +117,9 @@ __attribute__((weak)) void esp_clk_init(void)
 
     // Wait for UART TX to finish, otherwise some UART output will be lost
     // when switching APB frequency
-    esp_rom_output_tx_wait_idle(CONFIG_ESP_CONSOLE_ROM_SERIAL_PORT_NUM);
+    if (CONFIG_ESP_CONSOLE_ROM_SERIAL_PORT_NUM != -1) {
+        esp_rom_output_tx_wait_idle(CONFIG_ESP_CONSOLE_ROM_SERIAL_PORT_NUM);
+    }
 
     if (res)  {
         rtc_clk_cpu_freq_set_config(&new_config);
@@ -106,6 +127,9 @@ __attribute__((weak)) void esp_clk_init(void)
 
     // Re calculate the ccount to make time calculation correct.
     esp_cpu_set_cycle_count((uint64_t)esp_cpu_get_cycle_count() * new_freq_mhz / old_freq_mhz);
+
+    // Set crypto clock (`clk_sec`) to use 480M SPLL clock
+    REG_SET_FIELD(PCR_SEC_CONF_REG, PCR_SEC_CLK_SEL, 0x2);
 }
 
 static void select_rtc_slow_clk(soc_rtc_slow_clk_src_t rtc_slow_clk_src)
@@ -141,20 +165,18 @@ static void select_rtc_slow_clk(soc_rtc_slow_clk_src_t rtc_slow_clk_src)
                     if (retry_32k_xtal-- > 0) {
                         continue;
                     }
-#if CONFIG_IDF_TARGET_ESP32C5
-                    ESP_EARLY_LOGW(TAG, "32 kHz clock not found, switching to internal 32 kHz oscillator");
-                    rtc_slow_clk_src = SOC_RTC_SLOW_CLK_SRC_RC32K;
-#else
                     ESP_EARLY_LOGW(TAG, "32 kHz clock not found, switching to internal 150 kHz oscillator");
                     rtc_slow_clk_src = SOC_RTC_SLOW_CLK_SRC_RC_SLOW;
-#endif
                 }
             }
-        } else if (rtc_slow_clk_src == SOC_RTC_SLOW_CLK_SRC_RC32K) {
-            rtc_clk_rc32k_enable(true);
         }
         rtc_clk_slow_src_set(rtc_slow_clk_src);
-
+        // Disable unused clock sources after clock source switching is complete.
+        // Regardless of the clock source selection, the internal 136K clock source will always keep on.
+        if ((rtc_slow_clk_src != SOC_RTC_SLOW_CLK_SRC_XTAL32K) && (rtc_slow_clk_src != SOC_RTC_SLOW_CLK_SRC_OSC_SLOW)) {
+            rtc_clk_32k_enable(false);
+            rtc_clk_32k_disable_external();
+        }
         if (SLOW_CLK_CAL_CYCLES > 0) {
             /* TODO: 32k XTAL oscillator has some frequency drift at startup.
              * Improve calibration routine to wait until the frequency is stable.
@@ -165,7 +187,7 @@ static void select_rtc_slow_clk(soc_rtc_slow_clk_src_t rtc_slow_clk_src)
             cal_val = (uint32_t)(cal_dividend / rtc_clk_slow_freq_get_hz());
         }
     } while (cal_val == 0);
-    ESP_EARLY_LOGD(TAG, "RTC_SLOW_CLK calibration value: %d", cal_val);
+    ESP_EARLY_LOGD(TAG, "RTC_SLOW_CLK calibration value: %" PRIu32, cal_val);
     esp_clk_slowclk_cal_set(cal_val);
 }
 
@@ -182,7 +204,9 @@ void rtc_clk_select_rtc_slow_clk(void)
  */
 __attribute__((weak)) void esp_perip_clk_init(void)
 {
-#if 0  // TODO: [ESP32C5] IDF-8844
+// TODO: [ESP32C5] IDF-8844
+#if SOC_MODEM_CLOCK_SUPPORTED
+    // modem_clock_domain_pmu_state_icg_map_init();
     /* During system initialization, the low-power clock source of the modem
      * (WiFi, BLE or Coexist) follows the configuration of the slow clock source
      * of the system. If the WiFi, BLE or Coexist module needs a higher
@@ -191,14 +215,19 @@ __attribute__((weak)) void esp_perip_clk_init(void)
      * scenarios), the module needs to switch to the required clock source by
      * itself. */ //TODO - WIFI-5233
     soc_rtc_slow_clk_src_t rtc_slow_clk_src = rtc_clk_slow_src_get();
-    modem_clock_lpclk_src_t modem_lpclk_src = (modem_clock_lpclk_src_t)(\
-                                                                        (rtc_slow_clk_src == SOC_RTC_SLOW_CLK_SRC_XTAL32K)  ? MODEM_CLOCK_LPCLK_SRC_XTAL32K  \
-                                                                        : (rtc_slow_clk_src == SOC_RTC_SLOW_CLK_SRC_RC32K)    ? MODEM_CLOCK_LPCLK_SRC_RC32K    \
-                                                                        : (rtc_slow_clk_src == SOC_RTC_SLOW_CLK_SRC_OSC_SLOW) ? MODEM_CLOCK_LPCLK_SRC_EXT32K   \
-                                                                        : MODEM_CLOCK_LPCLK_SRC_RC32K);
-
+    modem_clock_lpclk_src_t modem_lpclk_src = (modem_clock_lpclk_src_t)(
+                                                  (rtc_slow_clk_src == SOC_RTC_SLOW_CLK_SRC_XTAL32K)  ? MODEM_CLOCK_LPCLK_SRC_XTAL32K
+                                                  : (rtc_slow_clk_src == SOC_RTC_SLOW_CLK_SRC_OSC_SLOW) ? MODEM_CLOCK_LPCLK_SRC_EXT32K
+                                                  : MODEM_CLOCK_LPCLK_SRC_RC_SLOW);
     modem_clock_select_lp_clock_source(PERIPH_WIFI_MODULE, modem_lpclk_src, 0);
 #endif
+
+    /* On ESP32-C5 ECO1, clearing BIT(31) of PCR_FPGA_DEBUG_REG is used to fix
+     * the issue where the modem module fails to transmit and receive packets
+     * due to the loss of the modem root clock caused by automatic clock gating
+     * during soc root clock source switching. For detailed information, refer
+     * to IDF-11064. */
+    clk_ll_soc_root_clk_auto_gating_bypass(true);
 
     ESP_EARLY_LOGW(TAG, "esp_perip_clk_init() has not been implemented yet");
 #if 0  // TODO: [ESP32C5] IDF-8844
@@ -233,7 +262,7 @@ __attribute__((weak)) void esp_perip_clk_init(void)
                            SYSTEM_SPI3_CLK_EN |
                            SYSTEM_SPI4_CLK_EN |
                            SYSTEM_TWAI_CLK_EN |
-                           SYSTEM_I2S1_CLK_EN |
+                           SYSTEM_I2S0_CLK_EN |
                            SYSTEM_SPI2_DMA_CLK_EN |
                            SYSTEM_SPI3_DMA_CLK_EN;
 
@@ -263,7 +292,7 @@ __attribute__((weak)) void esp_perip_clk_init(void)
                         SYSTEM_SPI3_CLK_EN |
                         SYSTEM_SPI4_CLK_EN |
                         SYSTEM_I2C_EXT1_CLK_EN |
-                        SYSTEM_I2S1_CLK_EN |
+                        SYSTEM_I2S0_CLK_EN |
                         SYSTEM_SPI2_DMA_CLK_EN |
                         SYSTEM_SPI3_DMA_CLK_EN;
     common_perip_clk1 = 0;
@@ -292,7 +321,7 @@ __attribute__((weak)) void esp_perip_clk_init(void)
 
     /* Set WiFi light sleep clock source to RTC slow clock */
     REG_SET_FIELD(SYSTEM_BT_LPCK_DIV_INT_REG, SYSTEM_BT_LPCK_DIV_NUM, 0);
-    CLEAR_PERI_REG_MASK(SYSTEM_BT_LPCK_DIV_FRAC_REG, SYSTEM_LPCLK_SEL_XTAL32K | SYSTEM_LPCLK_SEL_XTAL | SYSTEM_LPCLK_SEL_8M | SYSTEM_LPCLK_SEL_RTC_SLOW);
+    CLEAR_PERI_REG_MASK(SYSTEM_BT_LPCK_DIV_FRAC_REG, SYSTEM_LPCLK_SEL_8M);
     SET_PERI_REG_MASK(SYSTEM_BT_LPCK_DIV_FRAC_REG, SYSTEM_LPCLK_SEL_RTC_SLOW);
 
     /* Enable RNG clock. */

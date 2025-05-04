@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -96,7 +96,7 @@ const uint8_t *esp_bt_dev_get_address(void);
  *                  - ESP_ERR_INVALID_STATE : if bluetooth stack is not yet enabled
  *                  - ESP_FAIL : others
  */
-esp_err_t esp_bt_dev_set_device_name(const char *name);
+esp_err_t esp_bt_dev_set_device_name(const char *name) __attribute__((deprecated("Please use esp_bt_gap_set_device_name or esp_ble_gap_set_device_name")));
 
 /**
  * @brief           Get bluetooth device name. This function should be called after esp_bluedroid_enable()
@@ -110,7 +110,7 @@ esp_err_t esp_bt_dev_set_device_name(const char *name);
  *                  - ESP_ERR_INVALID_STATE : if bluetooth stack is not yet enabled
  *                  - ESP_FAIL : others
  */
-esp_err_t esp_bt_dev_get_device_name(void);
+esp_err_t esp_bt_dev_get_device_name(void) __attribute__((deprecated("Please use esp_bt_gap_get_device_name or esp_ble_gap_get_device_name")));
 
 /**
  * @brief           Config bluetooth device coexis status. This function should be called after esp_bluedroid_enable()
@@ -127,6 +127,17 @@ esp_err_t esp_bt_dev_get_device_name(void);
  *                  - ESP_FAIL : others
  */
 esp_err_t esp_bt_dev_coex_status_config(esp_bt_dev_coex_type_t type, esp_bt_dev_coex_op_t op, uint8_t status);
+
+/**
+ * @brief           This function is used to get the path name of the Bluetooth bond keys
+ *                  saved in the NVS module.
+ * @param[out]      file_path: buffer to store the config file path, max length NVS_KEY_NAME_MAX_SIZE
+ *
+ * @return
+ *                   - ESP_OK: success
+ *
+ */
+esp_err_t esp_bt_config_file_path_get(char *file_path);
 
 /**
  * @brief           This function is used to update the path name of bluetooth bond keys saved in the NVS module

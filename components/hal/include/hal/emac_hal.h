@@ -6,8 +6,6 @@
 
 #pragma once
 
-
-
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_assert.h"
@@ -29,14 +27,27 @@ extern "C" {
 
 #if CONFIG_IDF_TARGET_ESP32P4
 // Descriptor must be 64B aligned for ESP32P4 due to cache arrangement
-#define DMA_DESC_SIZE 64
-// ESP32P4 EMAC interface clock configuration is shared among other modules in registers
-#define EMAC_IF_RCC_ATOMIC() PERIPH_RCC_ATOMIC()
+#define EMAC_HAL_DMA_DESC_SIZE                              (64)
 #else
-#define DMA_DESC_SIZE  32
-#define EMAC_IF_RCC_ATOMIC()
+#define EMAC_HAL_DMA_DESC_SIZE                              (32)
 #endif
 
+
+/* DMA descriptor control bits */
+#define EMAC_HAL_TDES0_INTR_ON_COMPLET                      (1 << 30)
+#define EMAC_HAL_TDES0_CRC_APPEND_DISABLE                   (1 << 27)
+#define EMAC_HAL_TDES0_PAD_DISABLE                          (1 << 26)
+#define EMAC_HAL_TDES0_TX_TS_ENABLE                         (1 << 25)
+#define EMAC_HAL_TDES0_CRC_REPLACE_CTRL                     (1 << 24)
+#define EMAC_HAL_TDES0_IP_CRC_INSERT_HDR                    (1 << 22)
+#define EMAC_HAL_TDES0_IP_CRC_INSERT_HDR_PAYLOAD            (2 << 22)
+#define EMAC_HAL_TDES0_IP_CRC_INSERT_HDR_PAYLOAD_PSEUDO     (3 << 22)
+#define EMAC_HAL_TDES0_VLAN_REMOVE                          (1 << 18)
+#define EMAC_HAL_TDES0_VLAN_INSERT                          (2 << 18)
+#define EMAC_HAL_TDES0_VLAN_REPLACE                         (3 << 18)
+
+#define EMAC_HAL_TDES0_IP_CRC_INSERT_DISABLE_MASK           (3 << 22)
+#define EMAC_HAL_TDES0_VLAN_INSERT_DISABLE_MASK             (3 << 18)
 
 /**
 * @brief Ethernet DMA TX Descriptor
@@ -65,7 +76,7 @@ typedef struct {
             uint32_t TransmitEndRing : 1;         /*!< Descriptor list reached its final descriptor */
             uint32_t ChecksumInsertControl : 2;   /*!< Control checksum calculation and insertion */
             uint32_t CRCReplacementControl : 1;   /*!< Control CRC replace */
-            uint32_t TransmitTimestampEnable : 1; /*!< Enable IEEE1588 harware timestamping */
+            uint32_t TransmitTimestampEnable : 1; /*!< Enable IEEE1588 hardware timestamping */
             uint32_t DisablePad : 1;              /*!< Control add padding when frame short than 64 bytes */
             uint32_t DisableCRC : 1;              /*!< Control append CRC to the end of frame */
             uint32_t FirstSegment : 1;            /*!< Buffer contains the first segment of a frame */
@@ -91,25 +102,12 @@ typedef struct {
     uint32_t TimeStampLow;        /*!< Transmit Frame Timestamp Low */
     uint32_t TimeStampHigh;       /*!< Transmit Frame Timestamp High */
 
-#if CONFIG_IDF_TARGET_ESP32P4
-// TODO: must be 64B aligned for ESP32P4 (due to cache arrangement)
-// Could be better optimized (EMAC DMA block supports 32/64/128)?
-    uint32_t Reserved8;
-    uint32_t Reserved9;
-    uint32_t Reserved10;
-    uint32_t Reserved11;
-    uint32_t Reserved12;
-    uint32_t Reserved13;
-    uint32_t Reserved14;
-    uint32_t Reserved15;
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+    // descriptor must be aligned (due to cache arrangement)
+    uint8_t CacheAlign[EMAC_HAL_DMA_DESC_SIZE - 32]; // 32 is size of EMAC DMA descriptor without alignment
 #endif
 } eth_dma_tx_descriptor_t;
-#define EMAC_DMATXDESC_CHECKSUM_BYPASS 0            /*!< Checksum engine bypass */
-#define EMAC_DMATXDESC_CHECKSUM_IPV4HEADER 1        /*!< IPv4 header checksum insertion  */
-#define EMAC_DMATXDESC_CHECKSUM_TCPUDPICMPSEGMENT 2 /*!< TCP/UDP/ICMP Checksum Insertion calculated over segment only */
-#define EMAC_DMATXDESC_CHECKSUM_TCPUDPICMPFULL 3    /*!< TCP/UDP/ICMP Checksum Insertion fully calculated */
-
-ASSERT_TYPE_SIZE(eth_dma_tx_descriptor_t, DMA_DESC_SIZE);
+ASSERT_TYPE_SIZE(eth_dma_tx_descriptor_t, EMAC_HAL_DMA_DESC_SIZE);
 
 /**
 * @brief Ethernet DMA RX Descriptor
@@ -182,21 +180,14 @@ typedef struct {
     uint32_t TimeStampLow;  /*!< Receive frame timestamp low */
     uint32_t TimeStampHigh; /*!< Receive frame timestamp high */
 
-#if CONFIG_IDF_TARGET_ESP32P4
-// TODO: must be 64B aligned for ESP32P4 (due to cache arrangement)
-// Could be better optimized (EMAC DMA block supports 32/64/128)?
-    uint32_t Reserved8;
-    uint32_t Reserved9;
-    uint32_t Reserved10;
-    uint32_t Reserved11;
-    uint32_t Reserved12;
-    uint32_t Reserved13;
-    uint32_t Reserved14;
-    uint32_t Reserved15;
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+    // descriptor must be aligned (due to cache arrangement)
+    uint8_t CacheAlign[EMAC_HAL_DMA_DESC_SIZE - 32]; // 32 is size of EMAC DMA descriptor without alignment
 #endif
 } eth_dma_rx_descriptor_t;
 
-ASSERT_TYPE_SIZE(eth_dma_rx_descriptor_t, DMA_DESC_SIZE);
+ASSERT_TYPE_SIZE(eth_dma_rx_descriptor_t, EMAC_HAL_DMA_DESC_SIZE);
+
 
 typedef struct emac_mac_dev_s *emac_mac_soc_regs_t;
 typedef struct emac_dma_dev_s *emac_dma_soc_regs_t;
@@ -205,11 +196,17 @@ typedef struct emac_ext_dev_s *emac_ext_soc_regs_t;
 #else
 typedef void *emac_ext_soc_regs_t;
 #endif
+#if SOC_EMAC_IEEE1588V2_SUPPORTED
+typedef struct emac_ptp_dev_s *emac_ptp_soc_regs_t;
+#endif
 
 typedef struct {
     emac_mac_soc_regs_t mac_regs;
     emac_dma_soc_regs_t dma_regs;
     emac_ext_soc_regs_t ext_regs;
+#if SOC_EMAC_IEEE1588V2_SUPPORTED
+    emac_ptp_soc_regs_t ptp_regs;
+#endif
 } emac_hal_context_t;
 
 /**
@@ -218,6 +215,18 @@ typedef struct {
 typedef struct {
     eth_mac_dma_burst_len_t dma_burst_len;  /*!< eth-type enum of chosen dma burst-len */
 } emac_hal_dma_config_t;
+
+#if SOC_EMAC_IEEE1588V2_SUPPORTED
+/**
+ * @brief EMAC PTP configuration parameters
+ */
+typedef struct {
+    eth_mac_ptp_update_method_t upd_method;
+    eth_mac_ptp_roll_type_t roll;
+    uint32_t ptp_clk_src_period_ns;         /*!< 1/ptp_ref_clk */
+    uint32_t ptp_req_accuracy_ns;           /*!< required PTP accuracy in ns, must be greater than clk_src period */
+} emac_hal_ptp_config_t;
+#endif
 
 void emac_hal_init(emac_hal_context_t *hal);
 
@@ -278,71 +287,9 @@ void emac_hal_start(emac_hal_context_t *hal);
  * @return
  *     - ESP_OK: succeed
   *    - ESP_ERR_INVALID_STATE: previous frame transmission/reception is not completed. When this error occurs,
-  *      wait and reapeat the EMAC stop again.
+  *      wait and repeat the EMAC stop again.
  */
 esp_err_t emac_hal_stop(emac_hal_context_t *hal);
-
-/**
- * @brief Transmit data from buffer over EMAC
- *
- * @param[in] hal EMAC HAL context infostructure
- * @param[in] buf buffer to be transmitted
- * @param[in] length length of the buffer
- * @return number of transmitted bytes when success
- */
-uint32_t emac_hal_transmit_frame(emac_hal_context_t *hal, uint8_t *buf, uint32_t length);
-
-/**
- * @brief Transmit data from multiple buffers over EMAC in single Ethernet frame. Data will be joint into
- *        single frame in order in which the buffers are stored in input array.
- *
- * @param[in] hal EMAC HAL context infostructure
- * @param[in] buffs array of pointers to buffers to be transmitted
- * @param[in] lengths array of lengths of the buffers
- * @param[in] inbuffs_cnt number of buffers (i.e. input arrays size)
- * @return number of transmitted bytes when success
- *
- * @pre @p lengths array must have the same size as @p buffs array and their elements need to be stored in the same
- *      order, i.e. lengths[1] is a length assocaited with data buffer referenced at buffs[1] position.
- */
-uint32_t emac_hal_transmit_multiple_buf_frame(emac_hal_context_t *hal, uint8_t **buffs, uint32_t *lengths, uint32_t inbuffs_cnt);
-
-/**
- * @brief Allocate buffer with size equal to actually received Ethernet frame size.
- *
- * @param[in] hal EMAC HAL context infostructure
- * @param[in, out] size as an input defines maximum size of buffer to be allocated. As an output, indicates actual size of received
- *                      Ethernet frame which is waiting to be processed. Returned size may be 0 when there is no waiting frame.
- *
- * @note If maximum allowed size of buffer to be allocated is less than actual size of received Ethernet frame, the buffer
- *       is allocated with that limit and the frame will be truncated by emac_hal_receive_frame.
- *
- * @return Pointer to allocated buffer
- *         NULL when allocation fails or when there is no waiting Ethernet frame
- */
-uint8_t *emac_hal_alloc_recv_buf(emac_hal_context_t *hal, uint32_t *size);
-
-/**
- * @brief Copy received Ethernet frame from EMAC DMA memory space to application.
- *
- * @param[in] hal EMAC HAL context infostructure
- * @param[in] buf buffer into which the Ethernet frame is to be copied
- * @param[in] size buffer size. When buffer was allocated by ::emac_hal_alloc_recv_buf, this parameter needs to be set
- *                 to EMAC_HAL_BUF_SIZE_AUTO
- * @param[out] frames_remain number of frames remaining to be processed
- * @param[out] free_desc muber of free DMA Rx descriptors
- *
- * @return number of copied bytes when success
- *         0 when there is no waiting Ethernet frame or on error
- *
- * @note FCS field is never copied
- * @note If buffer size is less than actual size of received Ethernet frame, the frame will be truncated.
- * @note When this function is called with EMAC_HAL_BUF_SIZE_AUTO size parameter, buffer needs to be allocated by
- *       ::emac_hal_alloc_recv_buf function at first.
- */
-uint32_t emac_hal_receive_frame(emac_hal_context_t *hal, uint8_t *buf, uint32_t size, uint32_t *frames_remain, uint32_t *free_desc);
-
-uint32_t emac_hal_flush_recv_frame(emac_hal_context_t *hal, uint32_t *frames_remain, uint32_t *free_desc);
 
 void emac_hal_enable_flow_ctrl(emac_hal_context_t *hal, bool enable);
 
@@ -360,6 +307,130 @@ void emac_hal_set_rx_tx_desc_addr(emac_hal_context_t *hal, eth_dma_rx_descriptor
 
 #define emac_hal_transmit_poll_demand(hal) emac_ll_transmit_poll_demand((hal)->dma_regs, 0)
 
+#if SOC_EMAC_IEEE1588V2_SUPPORTED
+#define emac_hal_get_ts_status(hal) emac_ll_get_ts_status((hal)->ptp_regs);
+
+#define emac_hal_clock_enable_ptp(hal, clk_src, enable) emac_ll_clock_enable_ptp((hal)->ext_regs, clk_src, enable);
+
+/**
+ * @brief Start Ethernet PTP timestamp for transmit and receive frames
+ *
+ * @param hal EMAC HAL context infostructure
+ * @return
+ *         - ESP_OK: on success
+ *         - ESP_ERR_TIMEOUT: on PTP block is busy
+ */
+esp_err_t emac_hal_ptp_start(emac_hal_context_t *hal, const emac_hal_ptp_config_t *config);
+
+/**
+ * @brief Stop Ethernet PTP timestamp
+ *
+ * @param hal EMAC HAL context infostructure
+ * @return
+ *          Always return ESP_OK
+ */
+esp_err_t emac_hal_ptp_stop(emac_hal_context_t *hal);
+
+/**
+ * @brief Updates time stamp addend register relatively to the base value
+ *
+ * @param hal EMAC HAL context infostructure
+ * @param adj_ppb Correction value in ppb(parts per billion) (adj*10^9).
+ *            For example, if the crystal used is 5 Hz off, then this value should be 5000.
+ * @return
+ *         - ESP_OK: on success
+ *         - ESP_ERR_INVALID_STATE: on PTP block is busy
+ */
+esp_err_t emac_hal_ptp_adj_inc(emac_hal_context_t *hal, int32_t adj_ppb);
+
+/**
+ * @brief Updates time stamp addend register relatively to the previous value
+ *
+ * @param hal EMAC HAL context infostructure
+ * @param scale_factor scale factor with which the addend register value is updated
+ * @return
+ *         - ESP_OK: on success
+ *         - ESP_ERR_INVALID_STATE: on PTP block is busy
+ */
+esp_err_t emac_hal_adj_freq_factor(emac_hal_context_t *hal, double ratio);
+
+/**
+ * @brief Adds or subtracts to the PTP system time.
+ *
+ * @param hal EMAC HAL context infostructure
+ * @param off_sec the PTP Time update second value
+ * @param off_nsec the PTP Time update nano-second value
+ * @param sign specifies the PTP Time update value sign(true means positive, false means negative)
+ * @return
+ *        - ESP_OK: on success
+ *        - ESP_ERR_INVALID_STATE: on waiting for previous update to end
+ */
+esp_err_t emac_hal_ptp_time_add(emac_hal_context_t *hal, uint32_t off_sec, uint32_t off_nsec, bool sign);
+
+/**
+ * @brief Initialize the PTP time base
+ *
+ * @param hal EMAC HAL context infostructure
+ * @param seconds specifies the PTP Time init second value
+ * @param nano_seconds specifies the PTP Time init nano-second value
+ * @return
+ *         - ESP_OK: on success,
+ *         - ESP_ERR_INVALID_STATE: on waiting for previous init to end
+ */
+esp_err_t emac_hal_ptp_set_sys_time(emac_hal_context_t *hal, uint32_t seconds, uint32_t nano_seconds);
+
+/**
+ * @brief Get the current value of the system time maintained by the MAC
+ *
+ * @param hal EMAC HAL context infostructure
+ * @param seconds get the PTP system time second value
+ * @param nano_seconds get the PTP system time nano-second value
+ * @return
+ *          - ESP_OK: on success
+ *          - ESP_ERR_INVALID_ARG: on invalid argument
+ */
+esp_err_t emac_hal_ptp_get_sys_time(emac_hal_context_t *hal, uint32_t *seconds, uint32_t *nano_seconds);
+
+/**
+ * @brief Set target time to trigger event when the system time exceeds the target time
+ *
+ * @param hal EMAC HAL context infostructure
+ * @param seconds specifies the PTP target time second value
+ * @param nano_seconds specifies the PTP target Time nano-second value
+ * @return
+ *          - ESP_OK on success, ESP_ERR_TIMEOUT on busy
+ */
+esp_err_t emac_hal_ptp_set_target_time(emac_hal_context_t *hal, uint32_t seconds, uint32_t nano_seconds);
+
+/**
+ * @brief Get timestamp from receive descriptor
+ *
+ * @param hal EMAC HAL context infostructure
+ * @param rxdesc Pointer to receive descriptor
+ * @param seconds Pointer to store seconds part of timestamp
+ * @param nano_seconds Pointer to store nanoseconds part of timestamp
+ *
+ * @return
+ *     - ESP_OK: On success
+ *     - ESP_ERR_INVALID_STATE: Descriptor does not contain time stamp information (frame might be filtered)
+ */
+esp_err_t emac_hal_get_rxdesc_timestamp(emac_hal_context_t *hal, eth_dma_rx_descriptor_t *rxdesc, uint32_t *seconds, uint32_t *nano_seconds);
+
+/**
+ * @brief Get timestamp from transmit descriptor
+ *
+ * @param hal EMAC HAL context infostructure
+ * @param txdesc Pointer to transmit descriptor
+ * @param seconds Pointer to store seconds part of timestamp
+ * @param nano_seconds Pointer to store nanoseconds part of timestamp
+ *
+ * @return
+ *     - ESP_OK: On success
+ *     - ESP_ERR_INVALID_STATE: descriptor is still owned by DMA or time stamp is not ready yet
+ */
+esp_err_t emac_hal_get_txdesc_timestamp(emac_hal_context_t *hal, eth_dma_tx_descriptor_t *txdesc, uint32_t *seconds, uint32_t *nano_seconds);
+
+#endif // SOC_EMAC_IEEE1588V2_SUPPORTED
 #endif  // SOC_EMAC_SUPPORTED
 
 #ifdef __cplusplus

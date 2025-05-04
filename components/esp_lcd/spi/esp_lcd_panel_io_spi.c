@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -17,6 +17,9 @@
 #include "esp_lcd_panel_io.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
+#include "esp_private/gpio.h"
+#include "hal/gpio_ll.h"
+#include "hal/gpio_hal.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_lcd_common.h"
@@ -50,6 +53,8 @@ typedef struct {
     size_t num_trans_inflight;  // Number of transactions that are undergoing (the descriptor not recycled yet)
     int lcd_cmd_bits;          // Bit width of LCD command
     int lcd_param_bits;        // Bit width of LCD parameter
+    uint8_t cs_ena_pretrans;        // Amount of SPI bit-cycles the cs should be activated before the transmission (0-16)
+    uint8_t cs_ena_posttrans;       // Amount of SPI bit-cycles the cs should stay active after the transmission (0-16)
     struct {
         unsigned int dc_cmd_level: 1;    // Indicates the level of DC line when transferring command
         unsigned int dc_data_level: 1;   // Indicates the level of DC line when transferring color data
@@ -82,17 +87,17 @@ esp_err_t esp_lcd_new_panel_io_spi(esp_lcd_spi_bus_handle_t bus, const esp_lcd_p
         .queue_size = io_config->trans_queue_depth,
         .pre_cb = lcd_spi_pre_trans_cb, // pre-transaction callback, mainly control DC gpio level
         .post_cb = lcd_spi_post_trans_color_cb, // post-transaction, where we invoke user registered "on_color_trans_done()"
+        .cs_ena_pretrans = io_config->cs_ena_pretrans,
+        .cs_ena_posttrans = io_config->cs_ena_posttrans,
     };
     ret = spi_bus_add_device((spi_host_device_t)bus, &devcfg, &spi_panel_io->spi_dev);
     ESP_GOTO_ON_ERROR(ret, err, TAG, "adding spi device to bus failed");
 
     // if the DC line is not encoded into any spi transaction phase or it's not controlled by SPI peripheral
     if (io_config->dc_gpio_num >= 0) {
-        gpio_config_t io_conf = {
-            .mode = GPIO_MODE_OUTPUT,
-            .pin_bit_mask = 1ULL << io_config->dc_gpio_num,
-        };
-        ESP_GOTO_ON_ERROR(gpio_config(&io_conf), err, TAG, "configure GPIO for D/C line failed");
+        gpio_set_level(io_config->dc_gpio_num, 0);
+        gpio_func_sel(io_config->dc_gpio_num, PIN_FUNC_GPIO);
+        gpio_output_enable(io_config->dc_gpio_num);
     }
 
     spi_panel_io->flags.dc_cmd_level = io_config->flags.dc_high_on_cmd;
@@ -124,7 +129,7 @@ esp_err_t esp_lcd_new_panel_io_spi(esp_lcd_spi_bus_handle_t bus, const esp_lcd_p
 err:
     if (spi_panel_io) {
         if (io_config->dc_gpio_num >= 0) {
-            gpio_reset_pin(io_config->dc_gpio_num);
+            gpio_output_disable(io_config->dc_gpio_num);
         }
         free(spi_panel_io);
     }
@@ -146,7 +151,7 @@ static esp_err_t panel_io_spi_del(esp_lcd_panel_io_t *io)
     }
     spi_bus_remove_device(spi_panel_io->spi_dev);
     if (spi_panel_io->dc_gpio_num >= 0) {
-        gpio_reset_pin(spi_panel_io->dc_gpio_num);
+        gpio_output_disable(spi_panel_io->dc_gpio_num);
     }
     ESP_LOGD(TAG, "del lcd panel io spi @%p", spi_panel_io);
     free(spi_panel_io);
@@ -400,12 +405,13 @@ err:
     return ret;
 }
 
-static void lcd_spi_pre_trans_cb(spi_transaction_t *trans)
+IRAM_ATTR static void lcd_spi_pre_trans_cb(spi_transaction_t *trans)
 {
     esp_lcd_panel_io_spi_t *spi_panel_io = trans->user;
     lcd_spi_trans_descriptor_t *lcd_trans = __containerof(trans, lcd_spi_trans_descriptor_t, base);
     if (spi_panel_io->dc_gpio_num >= 0) { // set D/C line level if necessary
-        gpio_set_level(spi_panel_io->dc_gpio_num, lcd_trans->flags.dc_gpio_level);
+        // use ll function to speed up
+        gpio_ll_set_level(&GPIO, spi_panel_io->dc_gpio_num, lcd_trans->flags.dc_gpio_level);
     }
 }
 

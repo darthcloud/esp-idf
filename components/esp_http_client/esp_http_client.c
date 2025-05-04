@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -15,6 +15,7 @@
 #include "http_header.h"
 #include "esp_transport.h"
 #include "esp_transport_tcp.h"
+#include "esp_transport_ssl.h"
 #include "http_utils.h"
 #include "http_auth.h"
 #include "sdkconfig.h"
@@ -34,6 +35,11 @@ static const char *TAG = "HTTP_CLIENT";
 ESP_STATIC_ASSERT((int)ESP_HTTP_CLIENT_TLS_VER_ANY == (int)ESP_TLS_VER_ANY, "Enum mismatch in esp_http_client and esp-tls");
 ESP_STATIC_ASSERT((int)ESP_HTTP_CLIENT_TLS_VER_MAX <= (int)ESP_TLS_VER_TLS_MAX, "HTTP client supported TLS is not supported in esp-tls");
 
+#if CONFIG_ESP_HTTP_CLIENT_EVENT_POST_TIMEOUT == -1
+#define ESP_HTTP_CLIENT_EVENT_POST_TIMEOUT portMAX_DELAY
+#else
+#define ESP_HTTP_CLIENT_EVENT_POST_TIMEOUT pdMS_TO_TICKS(CONFIG_ESP_HTTP_CLIENT_EVENT_POST_TIMEOUT)
+#endif
 /**
  * HTTP Buffer
  */
@@ -179,7 +185,8 @@ static const char *HTTP_METHOD_MAPPING[] = {
     "UNLOCK",
     "PROPFIND",
     "PROPPATCH",
-    "MKCOL"
+    "MKCOL",
+    "REPORT"
 };
 
 static esp_err_t esp_http_client_request_send(esp_http_client_handle_t client, int write_len);
@@ -202,7 +209,7 @@ static esp_err_t http_dispatch_event(esp_http_client_t *client, esp_http_client_
 
 static void http_dispatch_event_to_event_loop(int32_t event_id, const void* event_data, size_t event_data_size)
 {
-    esp_err_t err = esp_event_post(ESP_HTTP_CLIENT_EVENT, event_id, event_data, event_data_size, portMAX_DELAY);
+    esp_err_t err = esp_event_post(ESP_HTTP_CLIENT_EVENT, event_id, event_data, event_data_size, ESP_HTTP_CLIENT_EVENT_POST_TIMEOUT);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to post http_client event: %"PRId32", error: %s", event_id, esp_err_to_name(err));
     }
@@ -248,7 +255,8 @@ static int http_on_header_event(esp_http_client_handle_t client)
 static int http_on_header_field(http_parser *parser, const char *at, size_t length)
 {
     esp_http_client_t *client = parser->data;
-    http_utils_append_string(&client->current_header_key, at, length);
+    http_on_header_event(client);
+    HTTP_RET_ON_FALSE_DBG(http_utils_append_string(&client->current_header_key, at, length), -1, TAG, "Failed to append string");
 
     return 0;
 }
@@ -260,15 +268,14 @@ static int http_on_header_value(http_parser *parser, const char *at, size_t leng
         return 0;
     }
     if (strcasecmp(client->current_header_key, "Location") == 0) {
-        http_utils_append_string(&client->location, at, length);
+        HTTP_RET_ON_FALSE_DBG(http_utils_append_string(&client->location, at, length), -1, TAG, "Failed to append string");
     } else if (strcasecmp(client->current_header_key, "Transfer-Encoding") == 0
                && memcmp(at, "chunked", length) == 0) {
         client->response->is_chunked = true;
     } else if (strcasecmp(client->current_header_key, "WWW-Authenticate") == 0) {
-        http_utils_append_string(&client->auth_header, at, length);
+        HTTP_RET_ON_FALSE_DBG(http_utils_append_string(&client->auth_header, at, length), -1, TAG, "Failed to append string");
     }
-    http_utils_append_string(&client->current_header_value, at, length);
-    http_on_header_event(client);
+    HTTP_RET_ON_FALSE_DBG(http_utils_append_string(&client->current_header_value, at, length), -1, TAG, "Failed to append string");
     return 0;
 }
 
@@ -350,17 +357,38 @@ static int http_on_chunk_header(http_parser *parser)
 
 esp_err_t esp_http_client_set_header(esp_http_client_handle_t client, const char *key, const char *value)
 {
+    if (client == NULL || client->request == NULL || client->request->headers == NULL || key == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     return http_header_set(client->request->headers, key, value);
 }
 
 esp_err_t esp_http_client_get_header(esp_http_client_handle_t client, const char *key, char **value)
 {
+    if (client == NULL || client->request == NULL || client->request->headers == NULL || key == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     return http_header_get(client->request->headers, key, value);
 }
 
 esp_err_t esp_http_client_delete_header(esp_http_client_handle_t client, const char *key)
 {
+    if (client == NULL || client->request == NULL || client->request->headers == NULL || key == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     return http_header_delete(client->request->headers, key);
+}
+
+esp_err_t esp_http_client_delete_all_headers(esp_http_client_handle_t client)
+{
+    if (client == NULL || client->request == NULL || client->request->headers == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return http_header_clean(client->request->headers);
 }
 
 esp_err_t esp_http_client_get_username(esp_http_client_handle_t client, char **value)
@@ -527,12 +555,12 @@ static esp_err_t _set_config(esp_http_client_handle_t client, const esp_http_cli
     }
 
     if (config->transport_type == HTTP_TRANSPORT_OVER_SSL) {
-        http_utils_assign_string(&client->connection_info.scheme, "https", -1);
+        HTTP_GOTO_ON_FALSE_DBG(http_utils_assign_string(&client->connection_info.scheme, "https", -1), ESP_ERR_NO_MEM, error, TAG, "failed to assign string");
         if (client->connection_info.port == 0) {
             client->connection_info.port = DEFAULT_HTTPS_PORT;
         }
     } else {
-        http_utils_assign_string(&client->connection_info.scheme, "http", -1);
+        HTTP_GOTO_ON_FALSE_DBG(http_utils_assign_string(&client->connection_info.scheme, "http", -1), ESP_ERR_NO_MEM, error, TAG, "failed to assign string");
         if (client->connection_info.port == 0) {
             client->connection_info.port = DEFAULT_HTTP_PORT;
         }
@@ -584,8 +612,62 @@ static esp_err_t _clear_auth_data(esp_http_client_handle_t client)
     return ESP_OK;
 }
 
+static esp_err_t esp_http_client_prepare_basic_auth(esp_http_client_handle_t client) {
+    char *auth_response = NULL;
+    esp_err_t ret = ESP_FAIL;
+
+    auth_response = http_auth_basic(client->connection_info.username, client->connection_info.password);
+    ESP_GOTO_ON_FALSE(auth_response, ESP_FAIL, error, TAG, "Failed to generate basic auth response");
+
+    ESP_LOGD(TAG, "auth_response=%s", auth_response);
+    ESP_GOTO_ON_FALSE(ESP_OK == esp_http_client_set_header(client, "Authorization", auth_response), ESP_FAIL, error, TAG, "Failed to set Authorization header");
+
+    ret = ESP_OK;
+
+error:
+    if (auth_response) {
+        free(auth_response);  // Free the auth_response after use
+    }
+
+    return ret;
+}
+
+#ifdef CONFIG_ESP_HTTP_CLIENT_ENABLE_DIGEST_AUTH
+static esp_err_t esp_http_client_prepare_digest_auth(esp_http_client_handle_t client) {
+    char *auth_response = NULL;
+    esp_err_t ret = ESP_FAIL;
+
+    // Freeing the allocated memory for auth_data->uri and setting it to NULL to prevent potential memory leaks
+    free(client->auth_data->uri);
+    client->auth_data->uri = NULL;
+    HTTP_GOTO_ON_FALSE_DBG(http_utils_assign_string(&client->auth_data->uri, client->connection_info.path, -1), ESP_ERR_NO_MEM, error, TAG, "failed to assign string");
+
+    if (client->connection_info.query) {
+        HTTP_GOTO_ON_FALSE_DBG(http_utils_append_string(&client->auth_data->uri, "?", -1), ESP_ERR_NO_MEM, error, TAG, "Failed to append string");
+        HTTP_GOTO_ON_FALSE_DBG(http_utils_append_string(&client->auth_data->uri, client->connection_info.query, -1), ESP_ERR_NO_MEM, error, TAG, "Failed to append string");
+    }
+
+    client->auth_data->cnonce = ((uint64_t)esp_random() << 32) + esp_random();
+    auth_response = http_auth_digest(client->connection_info.username, client->connection_info.password, client->auth_data);
+    ESP_GOTO_ON_FALSE(auth_response, ESP_FAIL, error, TAG, "Failed to generate digest auth response");
+
+    ESP_LOGD(TAG, "auth_response=%s", auth_response);
+    ESP_GOTO_ON_FALSE(ESP_OK == esp_http_client_set_header(client, "Authorization", auth_response), ESP_FAIL, error, TAG, "Failed to set Authorization header");
+
+    ret = ESP_OK;
+
+error:
+    if (auth_response) {
+        free(auth_response);  // Free the auth_response after use
+    }
+
+    return ret;
+}
+#endif
+
 static esp_err_t esp_http_client_prepare(esp_http_client_handle_t client)
 {
+    esp_err_t ret = ESP_OK;
     client->process_again = 0;
     client->response->data_process = 0;
     client->first_line_prepared = false;
@@ -605,40 +687,29 @@ static esp_err_t esp_http_client_prepare(esp_http_client_handle_t client)
     }
     http_parser_init(client->parser, HTTP_RESPONSE);
     if (client->connection_info.username) {
-        char *auth_response = NULL;
-
         if (client->connection_info.auth_type == HTTP_AUTH_TYPE_BASIC) {
-            auth_response = http_auth_basic(client->connection_info.username, client->connection_info.password);
+            ret = esp_http_client_prepare_basic_auth(client);
+        }
 #ifdef CONFIG_ESP_HTTP_CLIENT_ENABLE_DIGEST_AUTH
-        } else if (client->connection_info.auth_type == HTTP_AUTH_TYPE_DIGEST && client->auth_data) {
-            client->auth_data->uri = NULL;
-            http_utils_assign_string(&client->auth_data->uri,client->connection_info.path,-1);
-            if (client->connection_info.query){
-                http_utils_append_string(&client->auth_data->uri,"?",-1);
-                http_utils_append_string(&client->auth_data->uri,client->connection_info.query,-1);
-            }
-            client->auth_data->cnonce = ((uint64_t)esp_random() << 32) + esp_random();
-            auth_response = http_auth_digest(client->connection_info.username, client->connection_info.password, client->auth_data);
+        else if (client->connection_info.auth_type == HTTP_AUTH_TYPE_DIGEST && client->auth_data) {
+            ret = esp_http_client_prepare_digest_auth(client);
+        }
 #endif
-        }
-
-        if (auth_response) {
-            ESP_LOGD(TAG, "auth_response=%s", auth_response);
-            esp_http_client_set_header(client, "Authorization", auth_response);
-            free(auth_response);
-        }
     }
-    return ESP_OK;
+    return ret;
 }
 
 static char *_get_host_header(char *host, int port)
 {
     int err = 0;
     char *host_name;
+    assert(host != NULL);
+    // Check if host is an IPv6 address literal that needs square brackets according to RFC3986
+    bool is_ipv6 = (host[0] != '[' && strchr(host, ':') != NULL);
     if (port != DEFAULT_HTTP_PORT && port != DEFAULT_HTTPS_PORT) {
-        err = asprintf(&host_name, "%s:%d", host, port);
+        err = asprintf(&host_name, is_ipv6 ? "[%s]:%d" : "%s:%d", host, port);
     } else {
-        err = asprintf(&host_name, "%s", host);
+        err = asprintf(&host_name, is_ipv6 ? "[%s]" : "%s", host);
     }
     if (err == -1) {
         return NULL;
@@ -657,18 +728,41 @@ static bool init_common_tcp_transport(esp_http_client_handle_t client, const esp
     }
 
     if (config->if_name) {
-        client->if_name = calloc(1, sizeof(struct ifreq));
-        ESP_RETURN_ON_FALSE(client->if_name, false, TAG, "Memory exhausted");
-        memcpy(client->if_name, config->if_name, sizeof(struct ifreq));
+        if (client->if_name == NULL) {
+            client->if_name = calloc(1, sizeof(struct ifreq));
+            ESP_RETURN_ON_FALSE(client->if_name, false, TAG, "Memory exhausted");
+            memcpy(client->if_name, config->if_name, sizeof(struct ifreq));
+        }
         esp_transport_tcp_set_interface_name(transport, client->if_name);
     }
+#if CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS
+    if (config->alpn_protos) {
+        esp_transport_ssl_set_alpn_protocol(transport, config->alpn_protos);
+    }
+#endif
     return true;
+}
+
+static esp_err_t http_convert_addr_family_to_tls(esp_http_client_addr_type_t http_addr_family, esp_tls_addr_family_t *tls_addr_family)
+{
+    esp_err_t ret = ESP_OK;
+    if (http_addr_family == HTTP_ADDR_TYPE_UNSPEC) {
+        *tls_addr_family = ESP_TLS_AF_UNSPEC;
+    } else if (http_addr_family == HTTP_ADDR_TYPE_INET) {
+        *tls_addr_family = ESP_TLS_AF_INET;
+    } else if (http_addr_family == HTTP_ADDR_TYPE_INET6) {
+        *tls_addr_family = ESP_TLS_AF_INET6;
+    } else {
+        ret = ESP_ERR_INVALID_ARG;
+    }
+    return ret;
 }
 
 esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *config)
 {
 
     esp_http_client_handle_t client;
+    esp_tls_addr_family_t addr_family = ESP_TLS_AF_UNSPEC;
     esp_err_t ret = ESP_OK;
     esp_transport_handle_t tcp = NULL;
     char *host_name;
@@ -702,6 +796,8 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
         ESP_LOGE(TAG, "Error initialize transport");
         goto error;
     }
+    ESP_GOTO_ON_ERROR(http_convert_addr_family_to_tls(config->addr_type, &addr_family), error, TAG, "Failed to convert addr type %d", config->addr_type);
+    esp_transport_ssl_set_addr_family(tcp, addr_family);
 
     ESP_GOTO_ON_FALSE(init_common_tcp_transport(client, config, tcp), ESP_FAIL, error, TAG, "Failed to set TCP config");
 
@@ -717,6 +813,7 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
         ESP_LOGE(TAG, "Error initialize SSL Transport");
         goto error;
     }
+    esp_transport_ssl_set_addr_family(ssl, addr_family);
 
     ESP_GOTO_ON_FALSE(init_common_tcp_transport(client, config, ssl), ESP_FAIL, error, TAG, "Failed to set SSL config");
 
@@ -957,9 +1054,19 @@ esp_err_t esp_http_client_set_redirection(esp_http_client_handle_t client)
     return err;
 }
 
+esp_err_t esp_http_client_reset_redirect_counter(esp_http_client_handle_t client)
+{
+    if (client == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    client->redirect_counter = 0;
+    return ESP_OK;
+}
+
 static esp_err_t esp_http_check_response(esp_http_client_handle_t client)
 {
     if (client->response->status_code >= HttpStatus_Ok && client->response->status_code < HttpStatus_MultipleChoices) {
+        client->redirect_counter = 0;
         return ESP_OK;
     }
     if (client->redirect_counter >= client->max_redirection_count) {
@@ -986,7 +1093,7 @@ static esp_err_t esp_http_check_response(esp_http_client_handle_t client)
             http_dispatch_event_to_event_loop(HTTP_EVENT_REDIRECT, &evt_data, sizeof(esp_http_client_redirect_event_data_t));
             break;
         case HttpStatus_Unauthorized:
-            esp_http_client_add_auth(client);
+            return esp_http_client_add_auth(client);
     }
     return ESP_OK;
 }
@@ -1017,8 +1124,7 @@ esp_err_t esp_http_client_set_url(esp_http_client_handle_t client, const char *u
     old_port = client->connection_info.port;
 
     if (purl.field_data[UF_HOST].len) {
-        http_utils_assign_string(&client->connection_info.host, url + purl.field_data[UF_HOST].off, purl.field_data[UF_HOST].len);
-        ESP_GOTO_ON_FALSE(client->connection_info.host, ESP_ERR_NO_MEM, error, TAG, "Memory exhausted");
+        HTTP_GOTO_ON_FALSE_DBG(http_utils_assign_string(&client->connection_info.host, url + purl.field_data[UF_HOST].off, purl.field_data[UF_HOST].len), ESP_ERR_NO_MEM, error, TAG, "failed to assign string");
     }
     // Close the connection if host was changed
     if (old_host && client->connection_info.host
@@ -1039,8 +1145,7 @@ esp_err_t esp_http_client_set_url(esp_http_client_handle_t client, const char *u
     }
 
     if (purl.field_data[UF_SCHEMA].len) {
-        http_utils_assign_string(&client->connection_info.scheme, url + purl.field_data[UF_SCHEMA].off, purl.field_data[UF_SCHEMA].len);
-        ESP_RETURN_ON_FALSE(client->connection_info.scheme, ESP_ERR_NO_MEM, TAG, "Memory exhausted");
+        HTTP_GOTO_ON_FALSE_DBG(http_utils_assign_string(&client->connection_info.scheme, url + purl.field_data[UF_SCHEMA].off, purl.field_data[UF_SCHEMA].len), ESP_ERR_NO_MEM, error, TAG, "failed to assign string");
 
         if (strcasecmp(client->connection_info.scheme, "http") == 0) {
             client->connection_info.port = DEFAULT_HTTP_PORT;
@@ -1061,18 +1166,16 @@ esp_err_t esp_http_client_set_url(esp_http_client_handle_t client, const char *u
 
     if (purl.field_data[UF_USERINFO].len) {
         char *user_info = NULL;
-        http_utils_assign_string(&user_info, url + purl.field_data[UF_USERINFO].off, purl.field_data[UF_USERINFO].len);
+        HTTP_GOTO_ON_FALSE_DBG(http_utils_assign_string(&user_info, url + purl.field_data[UF_USERINFO].off, purl.field_data[UF_USERINFO].len), ESP_ERR_NO_MEM, error, TAG, "failed to assign string");
         if (user_info) {
             char *username = user_info;
             char *password = strchr(user_info, ':');
             if (password) {
                 *password = 0;
                 password ++;
-                http_utils_assign_string(&client->connection_info.password, password, -1);
-                ESP_RETURN_ON_FALSE(client->connection_info.password, ESP_ERR_NO_MEM, TAG, "Memory exhausted");
+                HTTP_GOTO_ON_FALSE_DBG(http_utils_assign_string(&client->connection_info.password, password, -1), ESP_ERR_NO_MEM, error, TAG, "failed to assign string");
             }
-            http_utils_assign_string(&client->connection_info.username, username, -1);
-            ESP_RETURN_ON_FALSE(client->connection_info.username, ESP_ERR_NO_MEM, TAG, "Memory exhausted");
+            HTTP_GOTO_ON_FALSE_DBG(http_utils_assign_string(&client->connection_info.username, username, -1), ESP_ERR_NO_MEM, error, TAG, "failed to assign string");
             free(user_info);
         } else {
             return ESP_ERR_NO_MEM;
@@ -1081,15 +1184,13 @@ esp_err_t esp_http_client_set_url(esp_http_client_handle_t client, const char *u
 
     //Reset path and query if there are no information
     if (purl.field_data[UF_PATH].len) {
-        http_utils_assign_string(&client->connection_info.path, url + purl.field_data[UF_PATH].off, purl.field_data[UF_PATH].len);
+        HTTP_GOTO_ON_FALSE_DBG(http_utils_assign_string(&client->connection_info.path, url + purl.field_data[UF_PATH].off, purl.field_data[UF_PATH].len), ESP_ERR_NO_MEM, error, TAG, "failed to assign string");
     } else {
-        http_utils_assign_string(&client->connection_info.path, "/", -1);
+        HTTP_GOTO_ON_FALSE_DBG(http_utils_assign_string(&client->connection_info.path, "/", -1), ESP_ERR_NO_MEM, error, TAG, "failed to assign string");
     }
-    ESP_RETURN_ON_FALSE(client->connection_info.path, ESP_ERR_NO_MEM, TAG, "Memory exhausted");
 
     if (purl.field_data[UF_QUERY].len) {
-        http_utils_assign_string(&client->connection_info.query, url + purl.field_data[UF_QUERY].off, purl.field_data[UF_QUERY].len);
-        ESP_RETURN_ON_FALSE(client->connection_info.query, ESP_ERR_NO_MEM, TAG, "Memory exhausted");
+        HTTP_GOTO_ON_FALSE_DBG(http_utils_assign_string(&client->connection_info.query, url + purl.field_data[UF_QUERY].off, purl.field_data[UF_QUERY].len), ESP_ERR_NO_MEM, error, TAG, "failed to assign string");
     } else if (client->connection_info.query) {
         free(client->connection_info.query);
         client->connection_info.query = NULL;
@@ -1109,6 +1210,15 @@ int esp_http_client_get_errno(esp_http_client_handle_t client)
         return -1;
     }
     return esp_transport_get_errno(client->transport);
+}
+
+esp_err_t esp_http_client_get_and_clear_last_tls_error(esp_http_client_handle_t client, int *tls_code, int *tls_flags)
+{
+    if (!client) {
+        ESP_LOGE(TAG, "Invalid client handle");
+        return ESP_FAIL;
+    }
+    return esp_tls_get_and_clear_last_error(esp_transport_get_error_handle(client->transport), tls_code, tls_flags);
 }
 
 esp_err_t esp_http_client_set_method(esp_http_client_handle_t client, esp_http_client_method_t method)
@@ -1208,15 +1318,15 @@ int esp_http_client_read(esp_http_client_handle_t client, char *buffer, int len)
         ESP_LOGD(TAG, "need_read=%d, byte_to_read=%d, rlen=%d, ridx=%d", need_read, byte_to_read, rlen, ridx);
 
         if (rlen <= 0) {
+            esp_log_level_t sev = ESP_LOG_WARN;
+            /* Check for cleanly closed connection */
+            if (rlen == ERR_TCP_TRANSPORT_CONNECTION_CLOSED_BY_FIN && client->response->is_chunked) {
+                /* Explicit call to parser for invoking `message_complete` callback */
+                http_parser_execute(client->parser, client->parser_settings, res_buffer->data, 0);
+                /* ...and lowering the message severity, as closed connection from server side is expected in chunked transport */
+                sev = ESP_LOG_DEBUG;
+            }
             if (errno != 0) {
-                esp_log_level_t sev = ESP_LOG_WARN;
-                /* Check for cleanly closed connection */
-                if (rlen == ERR_TCP_TRANSPORT_CONNECTION_CLOSED_BY_FIN && client->response->is_chunked) {
-                    /* Explicit call to parser for invoking `message_complete` callback */
-                    http_parser_execute(client->parser, client->parser_settings, res_buffer->data, 0);
-                    /* ...and lowering the message severity, as closed connection from server side is expected in chunked transport */
-                    sev = ESP_LOG_DEBUG;
-                }
                 ESP_LOG_LEVEL(sev, TAG, "esp_transport_read returned:%d and errno:%d ", rlen, errno);
             }
 
@@ -1475,7 +1585,14 @@ static esp_err_t esp_http_client_connect(esp_http_client_handle_t client)
 static int http_client_prepare_first_line(esp_http_client_handle_t client, int write_len)
 {
     if (write_len >= 0) {
-        http_header_set_format(client->request->headers, "Content-Length", "%d", write_len);
+        const bool length_required = (client->connection_info.method != HTTP_METHOD_GET &&
+                                      client->connection_info.method != HTTP_METHOD_HEAD &&
+                                      client->connection_info.method != HTTP_METHOD_DELETE);
+        if (write_len != 0 || length_required) {
+            http_header_set_format(client->request->headers, "Content-Length", "%d", write_len);
+        } else {
+            http_header_delete(client->request->headers, "Content-Length");
+        }
     } else {
         esp_http_client_set_header(client, "Transfer-Encoding", "chunked");
     }
@@ -1709,21 +1826,21 @@ esp_err_t esp_http_client_set_auth_data(esp_http_client_handle_t client, const c
     if (client == NULL || auth_data == NULL || len <= 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    http_utils_append_string(&client->auth_header, auth_data, len);
+    HTTP_RET_ON_FALSE_DBG(http_utils_append_string(&client->auth_header, auth_data, len), ESP_ERR_NO_MEM, TAG, "Failed to append string");
     return ESP_OK;
 }
 
-void esp_http_client_add_auth(esp_http_client_handle_t client)
+esp_err_t esp_http_client_add_auth(esp_http_client_handle_t client)
 {
     if (client == NULL) {
-        return;
+        return ESP_ERR_INVALID_ARG;
     }
     if (client->state != HTTP_STATE_RES_ON_DATA_START) {
-        return;
+        return ESP_OK;  // No action needed, return OK
     }
     if (client->redirect_counter >= client->max_authorization_retries) {
         ESP_LOGE(TAG, "Error, reached max_authorization_retries count=%d", client->redirect_counter);
-        return;
+        return ESP_FAIL;
     }
 
     char *auth_header = client->auth_header;
@@ -1745,7 +1862,7 @@ void esp_http_client_add_auth(esp_http_client_handle_t client)
 #endif
             client->connection_info.auth_type = HTTP_AUTH_TYPE_NONE;
             ESP_LOGE(TAG, "This authentication method is not supported: %s", auth_header);
-            return;
+            return ESP_ERR_NOT_SUPPORTED;
 #ifdef CONFIG_ESP_HTTP_CLIENT_ENABLE_BASIC_AUTH
         }
 #endif
@@ -1758,21 +1875,27 @@ void esp_http_client_add_auth(esp_http_client_handle_t client)
         client->auth_data->method = strdup(HTTP_METHOD_MAPPING[client->connection_info.method]);
 
         client->auth_data->nc = 1;
-        client->auth_data->realm = http_utils_get_string_between(auth_header, "realm=\"", "\"");
-        client->auth_data->algorithm = http_utils_get_string_between(auth_header, "algorithm=", ",");
+        HTTP_RET_ON_ERR_DBG(http_utils_get_string_between(auth_header, "realm=\"", "\"", &client->auth_data->realm), TAG, "Unable to extract substring between specified strings");
+        HTTP_RET_ON_ERR_DBG(http_utils_get_string_between(auth_header, "algorithm=", ",", &client->auth_data->algorithm), TAG, "Unable to extract substring between specified strings");
+
         if (client->auth_data->algorithm == NULL) {
-            client->auth_data->algorithm = http_utils_get_string_after(auth_header, "algorithm=");
+            HTTP_RET_ON_ERR_DBG(http_utils_get_string_after(auth_header, "algorithm=", &client->auth_data->algorithm), TAG, "Unable to extract substring after specified string");
         }
+
         if (client->auth_data->algorithm == NULL) {
             client->auth_data->algorithm = strdup("MD5");
         }
-        client->auth_data->qop = http_utils_get_string_between(auth_header, "qop=\"", "\"");
-        client->auth_data->nonce = http_utils_get_string_between(auth_header, "nonce=\"", "\"");
-        client->auth_data->opaque = http_utils_get_string_between(auth_header, "opaque=\"", "\"");
+
+        HTTP_RET_ON_ERR_DBG(http_utils_get_string_between(auth_header, "qop=\"", "\"", &client->auth_data->qop), TAG, "Unable to extract substring between specified strings");
+        HTTP_RET_ON_ERR_DBG(http_utils_get_string_between(auth_header, "nonce=\"", "\"", &client->auth_data->nonce), TAG, "Unable to extract substring between specified strings");
+        HTTP_RET_ON_ERR_DBG(http_utils_get_string_between(auth_header, "opaque=\"", "\"", &client->auth_data->opaque), TAG, "Unable to extract substring between specified strings");
         client->process_again = 1;
+
+        return ESP_OK;
     } else {
         client->connection_info.auth_type = HTTP_AUTH_TYPE_NONE;
         ESP_LOGW(TAG, "This request requires authentication, but does not provide header information for that");
+        return ESP_ERR_NOT_SUPPORTED;
     }
 }
 
@@ -1815,7 +1938,7 @@ esp_err_t esp_http_client_get_url(esp_http_client_handle_t client, char *url, co
         return ESP_ERR_INVALID_ARG;
     }
     if (client->connection_info.host && client->connection_info.scheme && client->connection_info.path) {
-        snprintf(url, len, "%s://%s%s", client->connection_info.scheme, client->connection_info.host, client->connection_info.path);
+        snprintf(url, len, "%s://%s:%d%s", client->connection_info.scheme, client->connection_info.host, client->connection_info.port, client->connection_info.path);
         return ESP_OK;
     } else {
         ESP_LOGE(TAG, "Failed to get URL");

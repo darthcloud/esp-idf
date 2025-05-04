@@ -8,7 +8,6 @@
 """
 import argparse
 import glob
-import logging
 import os
 import typing as t
 from collections import Counter
@@ -19,18 +18,20 @@ import yaml
 from dynamic_pipelines.constants import BUILD_ONLY_LABEL
 from dynamic_pipelines.constants import DEFAULT_CASES_TEST_PER_JOB
 from dynamic_pipelines.constants import DEFAULT_TARGET_TEST_CHILD_PIPELINE_FILEPATH
+from dynamic_pipelines.constants import DEFAULT_TARGET_TEST_CHILD_PIPELINE_NAME
+from dynamic_pipelines.constants import DEFAULT_TARGET_TEST_JOB_TEMPLATE_NAME
 from dynamic_pipelines.constants import DEFAULT_TEST_PATHS
-from dynamic_pipelines.constants import KNOWN_GENERATE_TEST_CHILD_PIPELINE_WARNINGS_FILEPATH
+from dynamic_pipelines.constants import (
+    KNOWN_GENERATE_TEST_CHILD_PIPELINE_WARNINGS_FILEPATH,
+)
+from dynamic_pipelines.constants import TIMEOUT_4H_TEMPLATE_NAME
 from dynamic_pipelines.models import EmptyJob
 from dynamic_pipelines.models import Job
 from dynamic_pipelines.models import TargetTestJob
 from dynamic_pipelines.utils import dump_jobs_to_yaml
-from gitlab.v4.objects import Project
-from gitlab_api import Gitlab
 from idf_build_apps import App
-from idf_build_apps.constants import BuildStatus
 from idf_ci.app import import_apps_from_txt
-from idf_pytest.script import get_all_apps
+from idf_pytest.constants import TIMEOUT_4H_MARKERS
 from idf_pytest.script import get_pytest_cases
 
 
@@ -50,22 +51,17 @@ def get_tags_with_amount(s: str) -> t.List[str]:
 
 
 def get_target_test_jobs(
-    project: Project, paths: str, apps: t.List[App]
-) -> t.Tuple[t.List[Job], t.List[str], t.Dict[str, t.List[str]]]:
+    paths: str, apps: t.List[App], exclude_runner_tags: t.Set[str]
+) -> t.Tuple[t.List[Job], t.List[str], t.List[str]]:
     """
     Return the target test jobs and the extra yaml files to include
     """
-    issues: t.Dict[str, t.List[str]] = {
-        'no_env_marker_test_cases': [],
-        'no_runner_tags': [],
-    }
-
     if mr_labels := os.getenv('CI_MERGE_REQUEST_LABELS'):
         print(f'MR labels: {mr_labels}')
 
         if BUILD_ONLY_LABEL in mr_labels.split(','):
             print('MR has build only label, skip generating target test child pipeline')
-            return [EmptyJob()], [], issues
+            return [EmptyJob()], [], []
 
     pytest_cases = get_pytest_cases(
         paths,
@@ -73,10 +69,11 @@ def get_target_test_jobs(
         marker_expr='not host_test',  # since it's generating target-test child pipeline
     )
 
+    no_env_marker_test_cases: t.List[str] = []
     res = defaultdict(list)
     for case in pytest_cases:
         if not case.env_markers:
-            issues['no_env_marker_test_cases'].append(case.item.nodeid)
+            no_env_marker_test_cases.append(case.item.nodeid)
             continue
 
         res[(case.target_selector, tuple(sorted(case.env_markers)))].append(case)
@@ -84,16 +81,17 @@ def get_target_test_jobs(
     target_test_jobs: t.List[Job] = []
     for (target_selector, env_markers), cases in res.items():
         runner_tags = get_tags_with_amount(target_selector) + list(env_markers)
-        # we don't need to get all runner, as long as we get one runner, it's fine
-        runner_list = project.runners.list(status='online', tag_list=','.join(runner_tags), get_all=False)
-        if not runner_list:
-            issues['no_runner_tags'].append(','.join(runner_tags))
-            logging.warning(f'No runner found for {",".join(runner_tags)}, required by cases:')
-            for case in cases:
-                logging.warning(f'  - {case.item.nodeid}')
+        if ','.join(runner_tags) in exclude_runner_tags:
+            print('WARNING: excluding test cases with runner tags:', runner_tags)
             continue
 
+        _extends = [DEFAULT_TARGET_TEST_JOB_TEMPLATE_NAME]
+        for timeout_4h_marker in TIMEOUT_4H_MARKERS:
+            if timeout_4h_marker in env_markers:
+                _extends.append(TIMEOUT_4H_TEMPLATE_NAME)
+
         target_test_job = TargetTestJob(
+            extends=_extends,
             name=f'{target_selector} - {",".join(env_markers)}',
             tags=runner_tags,
             parallel=len(cases) // DEFAULT_CASES_TEST_PER_JOB + 1,
@@ -111,49 +109,58 @@ def get_target_test_jobs(
     else:
         extra_include_yml = ['tools/ci/dynamic_pipelines/templates/generate_target_test_report.yml']
 
-    issues['no_env_marker_test_cases'] = sorted(issues['no_env_marker_test_cases'])
-    issues['no_runner_tags'] = sorted(issues['no_runner_tags'])
+    fast_pipeline_flag = int(os.getenv('REPORT_EXIT_CODE', 0)) == 30
+    if fast_pipeline_flag:
+        extra_include_yml = ['tools/ci/dynamic_pipelines/templates/fast_pipeline.yml']
 
-    return target_test_jobs, extra_include_yml, issues
+    no_env_marker_test_cases.sort()
+    return target_test_jobs, extra_include_yml, no_env_marker_test_cases
 
 
 def generate_target_test_child_pipeline(
-    project: Project,
     paths: str,
     apps: t.List[App],
     output_filepath: str,
 ) -> None:
-    target_test_jobs, extra_include_yml, issues = get_target_test_jobs(project, paths, apps)
-
     with open(KNOWN_GENERATE_TEST_CHILD_PIPELINE_WARNINGS_FILEPATH) as fr:
         known_warnings_dict = yaml.safe_load(fr) or dict()
 
-    failed = False
+    exclude_runner_tags_set = set(known_warnings_dict.get('no_runner_tags', []))
+    # EXCLUDE_RUNNER_TAGS is a string separated by ';'
+    # like 'esp32,generic;esp32c3,wifi'
+    if exclude_runner_tags := os.getenv('EXCLUDE_RUNNER_TAGS'):
+        exclude_runner_tags_set.update(exclude_runner_tags.split(';'))
+
+    target_test_jobs, extra_include_yml, no_env_marker_test_cases = get_target_test_jobs(
+        paths=paths,
+        apps=apps,
+        exclude_runner_tags=exclude_runner_tags_set,
+    )
+
     known_no_env_marker_test_cases = set(known_warnings_dict.get('no_env_marker_test_cases', []))
-    no_env_marker_test_cases = set(issues['no_env_marker_test_cases'])
+    no_env_marker_test_cases_set = set(no_env_marker_test_cases)
 
-    if no_env_marker_test_cases - known_no_env_marker_test_cases:
+    no_env_marker_test_cases_fail = False
+    if no_env_marker_test_cases_set - known_no_env_marker_test_cases:
         print('ERROR: NEW "no_env_marker_test_cases" detected:')
-        for case in no_env_marker_test_cases - known_no_env_marker_test_cases:
+        for case in no_env_marker_test_cases_set - known_no_env_marker_test_cases:
             print(f'  - {case}')
-        failed = True
+        no_env_marker_test_cases_fail = True
 
-    known_no_runner_tags = set(known_warnings_dict.get('no_runner_tags', []))
-    no_runner_tags = set(issues['no_runner_tags'])
-
-    if no_runner_tags - known_no_runner_tags:
-        print('ERROR: NEW "no_runner_tags" detected:')
-        for tag in no_runner_tags - known_no_runner_tags:
-            print(f'  - {tag}')
-        failed = True
-
-    if failed:
-        raise SystemExit(
-            f'Please fix the issue, '
-            f'or update the known warnings file: {KNOWN_GENERATE_TEST_CHILD_PIPELINE_WARNINGS_FILEPATH}'
+        print(
+            'Please add at least one environment markers to the test cases listed above. '
+            'You may check all the env markers here: tools/ci/idf_pytest/constants.py'
         )
 
-    dump_jobs_to_yaml(target_test_jobs, output_filepath, extra_include_yml)
+    if no_env_marker_test_cases_fail:
+        raise SystemExit('Failed to generate target test child pipeline.')
+
+    dump_jobs_to_yaml(
+        target_test_jobs,
+        output_filepath,
+        DEFAULT_TARGET_TEST_CHILD_PIPELINE_NAME,
+        extra_include_yml,
+    )
     print(f'Generate child pipeline yaml file {output_filepath} with {sum(j.parallel for j in target_test_jobs)} jobs')
 
 
@@ -170,29 +177,10 @@ if __name__ == '__main__':
         help='Paths to the apps to build.',
     )
     parser.add_argument(
-        '--project-id',
-        type=int,
-        default=os.getenv('CI_PROJECT_ID'),
-        help='Project ID',
-    )
-    parser.add_argument(
-        '--pipeline-id',
-        type=int,
-        default=os.getenv('PARENT_PIPELINE_ID'),
-        help='Pipeline ID',
-    )
-    parser.add_argument(
         '-o',
         '--output',
         default=DEFAULT_TARGET_TEST_CHILD_PIPELINE_FILEPATH,
         help='Output child pipeline file path',
-    )
-    parser.add_argument(
-        '--check',
-        action='store_true',
-        help='Check if the child pipeline could be generated successfully. '
-             'test cases without env marker or required unset runner will be printed out. '
-             '(Note: All apps and test cases will be checked)',
     )
     parser.add_argument(
         '--app-info-filepattern',
@@ -204,20 +192,12 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    gl_project = Gitlab(args.project_id).project
-
-    if args.check:
-        apps = list(get_all_apps(args.paths)[0])  # test related apps only
-        for app in apps:
-            app.build_status = BuildStatus.SUCCESS  # pretend they are built successfully
-    else:
-        apps = []
-        for f in glob.glob(args.app_info_filepattern):
-            apps.extend(import_apps_from_txt(f))
+    apps = []
+    for f in glob.glob(args.app_info_filepattern):
+        apps.extend(import_apps_from_txt(f))
 
     generate_target_test_child_pipeline(
-        gl_project,
-        args.paths,
-        apps,
-        args.output,
+        paths=args.paths,
+        apps=apps,
+        output_filepath=args.output,
     )

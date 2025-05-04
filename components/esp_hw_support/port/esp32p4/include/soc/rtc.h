@@ -350,8 +350,8 @@ void rtc_clk_cpu_freq_get_config(rtc_cpu_freq_config_t *out_config);
  * rtc_clk_cpu_freq_set_config when a switch to XTAL is needed.
  * Assumes that XTAL frequency has been determined — don't call in startup code.
  *
- * @note On ESP32C6, this function will check whether BBPLL can be disabled. If there is no consumer, then BBPLL will be
- * turned off. The behaviour is the same as using rtc_clk_cpu_freq_set_config to switch cpu clock source to XTAL.
+ * @note On ESP32P4, this function always disables CPLL after switching the CPU clock source to XTAL,
+ * since there is no peripheral relies on CPLL clock (except Flash/PSRAM if their clock source selects CPLL).
  */
 void rtc_clk_cpu_freq_set_xtal(void);
 
@@ -433,15 +433,6 @@ uint64_t rtc_time_slowclk_to_us(uint64_t rtc_cycles, uint32_t period);
 uint64_t rtc_time_get(void);
 
 /**
- * @brief Busy loop until next RTC_SLOW_CLK cycle
- *
- * This function returns not earlier than the next RTC_SLOW_CLK clock cycle.
- * In some cases (e.g. when RTC_SLOW_CLK cycle is very close), it may return
- * one RTC_SLOW_CLK cycle later.
- */
-void rtc_clk_wait_for_slow_cycle(void);
-
-/**
  * @brief Enable the rtc digital 8M clock
  *
  * This function is used to enable the digital rtc 8M clock to support peripherals.
@@ -470,6 +461,14 @@ bool rtc_dig_8m_enabled(void);
 uint32_t rtc_clk_freq_cal(uint32_t cal_val);
 
 /**
+ * @brief Calculate the slow clock period value by slow clock frequency
+ *
+ * @param freq_hz Frequency of the slow clock in Hz
+ * @return Fixed point value of slow clock period in microseconds
+ */
+uint32_t rtc_clk_freq_to_period(uint32_t freq_hz);
+
+/**
  * @brief Enable or disable APLL
  *
  * Output frequency is given by the formula:
@@ -494,7 +493,7 @@ void rtc_clk_apll_enable(bool enable);
  *
  * @return
  *      - 0 Failed
- *      - else Sucess
+ *      - else Success
  */
 uint32_t rtc_clk_apll_coeff_calc(uint32_t freq, uint32_t *_o_div, uint32_t *_sdm0, uint32_t *_sdm1, uint32_t *_sdm2);
 

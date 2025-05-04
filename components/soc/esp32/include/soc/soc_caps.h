@@ -1,6 +1,6 @@
 
 /*
- * SPDX-FileCopyrightText: 2020-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -70,6 +70,7 @@
 #define SOC_SDMMC_HOST_SUPPORTED    1
 #define SOC_BT_SUPPORTED            1
 #define SOC_PCNT_SUPPORTED          1
+#define SOC_PHY_SUPPORTED           1
 #define SOC_WIFI_SUPPORTED          1
 #define SOC_SDIO_SLAVE_SUPPORTED    1
 #define SOC_TWAI_SUPPORTED          1
@@ -100,6 +101,10 @@
 #define SOC_WDT_SUPPORTED           1
 #define SOC_SPI_FLASH_SUPPORTED     1
 #define SOC_RNG_SUPPORTED           1
+#define SOC_LIGHT_SLEEP_SUPPORTED   1
+#define SOC_DEEP_SLEEP_SUPPORTED    1
+#define SOC_LP_PERIPH_SHARE_INTERRUPT   1   // LP peripherals sharing the same interrupt source
+#define SOC_PM_SUPPORTED            1
 
 #if SOC_CAPS_ECO_VER < 200
 #define SOC_DPORT_WORKAROUND                   1
@@ -109,7 +114,7 @@
 /*-------------------------- XTAL CAPS ---------------------------------------*/
 #define SOC_XTAL_SUPPORT_26M            1
 #define SOC_XTAL_SUPPORT_40M            1
-#define SOC_XTAL_SUPPORT_AUTO_DETECT    1
+#define SOC_XTAL_SUPPORT_AUTO_DETECT    1   // Measure XTAL freq with an internal RC clock
 
 /*-------------------------- ADC CAPS ----------------------------------------*/
 /*!< SAR ADC Module*/
@@ -184,18 +189,24 @@
 // digital I/O pad powered by VDD3P3_CPU or VDD_SPI(GPIO_NUM: 1, 3, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 19, 21, 22, 23)
 #define SOC_GPIO_VALID_DIGITAL_IO_PAD_MASK 0xEF0FEAULL
 
-// The Clock Out singnal is binding to the pin's IO_MUX function
+// The Clock Out signal is binding to the pin's IO_MUX function
 #define SOC_GPIO_CLOCKOUT_BY_IO_MUX    (1)
+#define SOC_GPIO_CLOCKOUT_CHANNEL_NUM  (3)
+
+// RTC_IOs and DIG_IOs can be hold during deep sleep and after waking up
+#define SOC_GPIO_SUPPORT_HOLD_IO_IN_DSLP (1)
 
 /*-------------------------- I2C CAPS ----------------------------------------*/
 // ESP32 has 2 I2C
-#define SOC_I2C_NUM             (2)
+#define SOC_I2C_NUM                (2U)
+#define SOC_HP_I2C_NUM             (2)
 
 #define SOC_I2C_FIFO_LEN        (32) /*!< I2C hardware FIFO depth */
 #define SOC_I2C_CMD_REG_NUM     (16) /*!< Number of I2C command registers */
 #define SOC_I2C_SUPPORT_SLAVE   (1)
 
 #define SOC_I2C_SUPPORT_APB     (1)
+#define SOC_I2C_SUPPORT_10BIT_ADDR (1)
 
 // On ESP32, the stop bit should be independent, we can't put trans data and stop command together
 #define SOC_I2C_STOP_INDEPENDENT (1)
@@ -207,14 +218,17 @@
 #define SOC_I2S_SUPPORTS_APLL       (1)
 #define SOC_I2S_SUPPORTS_PLL_F160M  (1)
 #define SOC_I2S_SUPPORTS_PDM        (1)
-#define SOC_I2S_SUPPORTS_PDM_TX     (1)
+#define SOC_I2S_SUPPORTS_PDM_TX     (1)     // Support to output raw PDM format data
+#define SOC_I2S_SUPPORTS_PCM2PDM    (1)     // Support to write PCM format but output PDM format data with the help of PCM to PDM filter
+#define SOC_I2S_SUPPORTS_PDM_RX     (1)     // Support to input raw PDM format data
+#define SOC_I2S_SUPPORTS_PDM2PCM    (1)     // Support to input PDM format but read PCM format data with the help of PDM to PCM filter
 #define SOC_I2S_PDM_MAX_TX_LINES    (1U)
-#define SOC_I2S_SUPPORTS_PDM_RX     (1)
 #define SOC_I2S_PDM_MAX_RX_LINES    (1U)
 #define SOC_I2S_SUPPORTS_ADC_DAC    (1)
 #define SOC_I2S_SUPPORTS_ADC        (1)
 #define SOC_I2S_SUPPORTS_DAC        (1)
 #define SOC_I2S_SUPPORTS_LCD_CAMERA (1)
+#define SOC_I2S_MAX_DATA_WIDTH      (24)
 
 #define SOC_I2S_TRANS_SIZE_ALIGN_WORD (1) // I2S DMA transfer size must be aligned to word
 #define SOC_I2S_LCD_I80_VARIANT       (1) // I2S has a special LCD mode that can generate Intel 8080 TX timing
@@ -230,6 +244,7 @@
 #define SOC_LEDC_SUPPORT_APB_CLOCK       (1)
 #define SOC_LEDC_SUPPORT_REF_TICK        (1)
 #define SOC_LEDC_SUPPORT_HS_MODE         (1)
+#define SOC_LEDC_TIMER_NUM               (4)
 #define SOC_LEDC_CHANNEL_NUM             (8)
 #define SOC_LEDC_TIMER_BIT_WIDTH         (20)
 
@@ -304,7 +319,6 @@
 #define SOC_MEMSPI_SRC_FREQ_26M_SUPPORTED         1
 #define SOC_MEMSPI_SRC_FREQ_20M_SUPPORTED         1
 
-
 // Peripheral supports DIO, DOUT, QIO, or QOUT
 #define SOC_SPI_PERIPH_SUPPORT_MULTILINE_MODE(spi_host)         ({(void)spi_host; 1;})
 
@@ -315,11 +329,17 @@
 #define SOC_TIMER_GROUP_TOTAL_TIMERS      (4)
 #define SOC_TIMER_GROUP_SUPPORT_APB       (1)
 
+/*-------------------------- LP_TIMER CAPS ----------------------------------*/
+#define SOC_LP_TIMER_BIT_WIDTH_LO           32 // Bit width of lp_timer low part
+#define SOC_LP_TIMER_BIT_WIDTH_HI           16 // Bit width of lp_timer high part
+
 /*-------------------------- TOUCH SENSOR CAPS -------------------------------*/
 #define SOC_TOUCH_SENSOR_VERSION            (1U)     /*!<Hardware version of touch sensor */
 #define SOC_TOUCH_SENSOR_NUM                (10)
-
-#define SOC_TOUCH_SAMPLER_NUM               (1U)    /*!< The sampler number in total, each sampler can be used to sample on one frequency */
+#define SOC_TOUCH_MIN_CHAN_ID               (0U)    /*!< Touch minimum channel number */
+#define SOC_TOUCH_MAX_CHAN_ID               (9)     /*!< Touch maximum channel number */
+#define SOC_TOUCH_SUPPORT_SLEEP_WAKEUP      (1)
+#define SOC_TOUCH_SAMPLE_CFG_NUM            (1U)    /*!< The sample configuration number in total, each sampler can be used to sample on one frequency */
 
 /*-------------------------- TWAI CAPS ---------------------------------------*/
 #define SOC_TWAI_CONTROLLER_NUM         1UL
@@ -342,6 +362,7 @@
 #define SOC_UART_FIFO_LEN           (128)       /*!< The UART hardware FIFO length */
 #define SOC_UART_BITRATE_MAX        (5000000)   /*!< Max bit rate supported by UART */
 
+#define SOC_UART_WAKEUP_SUPPORT_ACTIVE_THRESH_MODE (1)
 
 /*-------------------------- SPIRAM CAPS -------------------------------------*/
 #define SOC_SPIRAM_SUPPORTED    1
@@ -368,7 +389,6 @@
 
 /*--------------------------- RSA CAPS ---------------------------------------*/
 #define SOC_RSA_MAX_BIT_LEN    (4096)
-
 
 /*-------------------------- AES CAPS -----------------------------------------*/
 #define SOC_AES_SUPPORT_AES_128 (1)
@@ -404,7 +424,7 @@
 #define SOC_PM_SUPPORT_MODEM_PD                   (1)     /*!<Modem here includes wifi and btdm */
 
 #define SOC_CONFIGURABLE_VDDSDIO_SUPPORTED        (1)
-
+#define SOC_PM_MODEM_PD_BY_SW                     (1)
 /*-------------------------- CLOCK SUBSYSTEM CAPS ----------------------------------------*/
 #define SOC_CLK_APLL_SUPPORTED                    (1)
 
@@ -413,6 +433,8 @@
 #define SOC_CLK_RC_FAST_SUPPORT_CALIBRATION       (1)
 
 #define SOC_CLK_XTAL32K_SUPPORTED                 (1)     /*!< Support to connect an external low frequency crystal */
+
+#define SOC_CLK_LP_FAST_SUPPORT_XTAL_D4           (1)     /*!< Support XTAL_D4 clock as the LP_FAST clock source */
 
 /*-------------------------- SDMMC CAPS -----------------------------------------*/
 
@@ -435,6 +457,7 @@
 #define SOC_BT_CLASSIC_SUPPORTED        (1)    /*!< Support Bluetooth Classic hardware */
 #define SOC_BLE_DEVICE_PRIVACY_SUPPORTED (0)   /*!< Support BLE device privacy mode */
 #define SOC_BLUFI_SUPPORTED             (1)    /*!< Support BLUFI */
+#define SOC_BT_H2C_ENC_KEY_CTRL_ENH_VSC_SUPPORTED (1) /*!< Support Bluetooth Classic encryption key size configuration through vendor-specific HCI command */
 
 /*-------------------------- ULP CAPS ----------------------------------------*/
 #define SOC_ULP_HAS_ADC                     (1)    /* ADC can be accessed from ULP */

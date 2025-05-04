@@ -67,10 +67,15 @@ bool g_wpa_suiteb_certification;
 bool g_wpa_default_cert_bundle;
 int (*esp_crt_bundle_attach_fn)(void *conf);
 #endif
+#ifndef CONFIG_TLS_INTERNAL_CLIENT
+char *g_wpa_domain_match;
+#endif
 
 void eap_peer_config_deinit(struct eap_sm *sm);
 void eap_peer_blob_deinit(struct eap_sm *sm);
 void eap_deinit_prev_method(struct eap_sm *sm, const char *txt);
+static void eap_sm_request(struct eap_sm *sm, enum wpa_ctrl_req_type field,
+			   const char *msg, size_t msglen);
 
 #ifdef EAP_PEER_METHOD
 static struct eap_method *eap_methods = NULL;
@@ -314,6 +319,15 @@ int eap_peer_register_methods(void)
 	return ret;
 }
 
+static void eap_sm_free_key(struct eap_sm *sm)
+{
+	if (sm->eapKeyData) {
+		bin_clear_free(sm->eapKeyData, sm->eapKeyDataLen);
+		sm->eapKeyData = NULL;
+	}
+}
+
+
 void eap_deinit_prev_method(struct eap_sm *sm, const char *txt)
 {
 	if (sm->m == NULL || sm->eap_method_priv == NULL)
@@ -518,7 +532,9 @@ int eap_peer_config_init(
 	sm->config.identity = NULL;
 	sm->config.password = NULL;
 	sm->config.new_password = NULL;
-
+#ifndef CONFIG_TLS_INTERNAL_CLIENT
+	sm->config.domain_match = g_wpa_domain_match;
+#endif
 	sm->config.private_key_passwd = private_key_passwd;
 	sm->config.client_cert = (u8 *)sm->blob[0].name;
 	sm->config.private_key = (u8 *)sm->blob[1].name;
@@ -713,10 +729,10 @@ _out:
 	return ret;
 }
 
-#if defined(CONFIG_CTRL_IFACE) || !defined(CONFIG_NO_STDOUT_DEBUG)
 static void eap_sm_request(struct eap_sm *sm, enum wpa_ctrl_req_type field,
 			   const char *msg, size_t msglen)
 {
+#if defined(CONFIG_CTRL_IFACE) || !defined(CONFIG_NO_STDOUT_DEBUG)
 	struct eap_peer_config *config;
 
 	if (sm == NULL)
@@ -741,14 +757,14 @@ static void eap_sm_request(struct eap_sm *sm, enum wpa_ctrl_req_type field,
 	case WPA_CTRL_REQ_EAP_PASSPHRASE:
 		config->pending_req_passphrase++;
 		break;
+	case WPA_CTRL_REQ_EXT_CERT_CHECK:
+		break;
 	default:
 		return;
 	}
 
-}
-#else /* CONFIG_CTRL_IFACE || !CONFIG_NO_STDOUT_DEBUG */
-#define eap_sm_request(sm, type, msg, msglen) do { } while (0)
 #endif /* CONFIG_CTRL_IFACE || !CONFIG_NO_STDOUT_DEBUG */
+}
 
 const char * eap_sm_get_method_name(struct eap_sm *sm)
 {
@@ -824,6 +840,7 @@ void eap_sm_abort(struct eap_sm *sm)
 {
 	wpabuf_free(sm->lastRespData);
 	sm->lastRespData = NULL;
+	eap_sm_free_key(sm);
 }
 
 /**

@@ -1,11 +1,12 @@
 /*
- * SPDX-FileCopyrightText: 2021-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <vector>
 #include <numeric>
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -13,6 +14,9 @@
 #include "unity.h"
 #include "unity_test_utils.h"
 #include "soc/soc.h"
+#include <chrono>
+#include <thread>
+#include "esp_timer.h"
 
 extern "C" void setUp()
 {
@@ -27,8 +31,7 @@ extern "C" void tearDown()
 
 static const char* TAG = "cxx";
 
-class NonPOD
-{
+class NonPOD {
 public:
     NonPOD(int a_) : a(a_) { }
     int a;
@@ -59,12 +62,12 @@ TEST_CASE("can use static initializers for non-POD types", "[restart_init]")
 static SemaphoreHandle_t s_slow_init_sem = NULL;
 
 template<int obj>
-class SlowInit
-{
+class SlowInit {
 public:
-    SlowInit(int arg) {
+    SlowInit(int arg)
+    {
         ESP_LOGD(TAG, "init obj=%d start, arg=%d", obj, arg);
-        vTaskDelay(300/portTICK_PERIOD_MS);
+        vTaskDelay(300 / portTICK_PERIOD_MS);
         TEST_ASSERT_EQUAL(-1, mInitBy);
         TEST_ASSERT_EQUAL(0, mInitCount);
         mInitBy = arg;
@@ -72,7 +75,8 @@ public:
         ESP_LOGD(TAG, "init obj=%d done", obj);
     }
 
-    static void task(void* arg) {
+    static void task(void* arg)
+    {
         int taskId = reinterpret_cast<int>(arg);
         ESP_LOGD(TAG, "obj=%d before static init, task=%d", obj, taskId);
         static SlowInit slowinit(taskId);
@@ -94,7 +98,7 @@ template<int obj>
 static int start_slow_init_task(int id, int affinity)
 {
     return xTaskCreatePinnedToCore(&SlowInit<obj>::task, "slow_init", 2048,
-            reinterpret_cast<void*>(id), 3, NULL, affinity) ? 1 : 0;
+                                   reinterpret_cast<void*>(id), 3, NULL, affinity) ? 1 : 0;
 }
 
 TEST_CASE("static initialization guards work as expected", "[misc]")
@@ -105,7 +109,7 @@ TEST_CASE("static initialization guards work as expected", "[misc]")
     int task_count = 0;
     // four tasks competing for static initialization of one object
     task_count += start_slow_init_task<1>(0, PRO_CPU_NUM);
-#if portNUM_PROCESSORS == 2
+#if CONFIG_FREERTOS_NUMBER_OF_CORES == 2
     task_count += start_slow_init_task<1>(1, APP_CPU_NUM);
 #endif
     task_count += start_slow_init_task<1>(2, PRO_CPU_NUM);
@@ -113,7 +117,7 @@ TEST_CASE("static initialization guards work as expected", "[misc]")
 
     // four tasks competing for static initialization of another object
     task_count += start_slow_init_task<2>(0, PRO_CPU_NUM);
-#if portNUM_PROCESSORS == 2
+#if CONFIG_FREERTOS_NUMBER_OF_CORES == 2
     task_count += start_slow_init_task<2>(1, APP_CPU_NUM);
 #endif
     task_count += start_slow_init_task<2>(2, PRO_CPU_NUM);
@@ -121,16 +125,16 @@ TEST_CASE("static initialization guards work as expected", "[misc]")
 
     // All tasks should
     for (int i = 0; i < task_count; ++i) {
-        TEST_ASSERT_TRUE(xSemaphoreTake(s_slow_init_sem, 500/portTICK_PERIOD_MS));
+        TEST_ASSERT_TRUE(xSemaphoreTake(s_slow_init_sem, 500 / portTICK_PERIOD_MS));
     }
     vSemaphoreDelete(s_slow_init_sem);
 
     vTaskDelay(10); // Allow tasks to clean up, avoids race with leak detector
 }
 
-struct GlobalInitTest
-{
-    GlobalInitTest() : index(order++) {
+struct GlobalInitTest {
+    GlobalInitTest() : index(order++)
+    {
     }
     int index;
     static int order;
@@ -149,8 +153,7 @@ TEST_CASE("global initializers run in the correct order", "[misc]")
     TEST_ASSERT_EQUAL(2, g_init_test3.index);
 }
 
-struct StaticInitTestBeforeScheduler
-{
+struct StaticInitTestBeforeScheduler {
     StaticInitTestBeforeScheduler()
     {
         static int first_init_order = getOrder();
@@ -180,8 +183,7 @@ TEST_CASE("before scheduler has started, static initializers work correctly", "[
     TEST_ASSERT_EQUAL(2, StaticInitTestBeforeScheduler::order);
 }
 
-struct PriorityInitTest
-{
+struct PriorityInitTest {
     PriorityInitTest()
     {
         index = getOrder();
@@ -198,7 +200,7 @@ struct PriorityInitTest
 
 int PriorityInitTest::order = 0;
 
-// init_priority objects are initialized from the lowest to the heighest priority number
+// init_priority objects are initialized from the lowest to the highest priority number
 // Default init_priority is always the lowest (highest priority number)
 PriorityInitTest g_static_init_priority_test2;
 PriorityInitTest g_static_init_priority_test1 __attribute__((init_priority(1000)));
@@ -219,15 +221,13 @@ TEST_CASE("can use new and delete", "[misc]")
     delete[] int_array;
 }
 
-class Base
-{
+class Base {
 public:
     virtual ~Base() = default;
     virtual void foo() = 0;
 };
 
-class Derived : public Base
-{
+class Derived : public Base {
 public:
     virtual void foo() { }
 };
@@ -235,7 +235,7 @@ public:
 TEST_CASE("can call virtual functions", "[misc]")
 {
     Derived d;
-    Base& b = static_cast<Base&>(d);
+    Base &b = static_cast<Base &>(d);
     b.foo();
 }
 
@@ -244,6 +244,36 @@ TEST_CASE("can use std::vector", "[misc]")
     std::vector<int> v(10, 1);
     v[0] = 42;
     TEST_ASSERT_EQUAL(51, std::accumulate(std::begin(v), std::end(v), 0));
+}
+
+static volatile bool is_tls_class_destructor_called;
+struct TestTLS {
+    TestTLS() { }
+    ~TestTLS()
+    {
+        is_tls_class_destructor_called = true;
+    }
+    void foo() { }
+};
+
+thread_local TestTLS s_testTLS;
+
+void test_thread_local_destructors(void * arg)
+{
+    s_testTLS.foo();
+    xSemaphoreGive(s_slow_init_sem);
+    vTaskDelete(NULL);
+}
+
+TEST_CASE("call destructors for thread_local classes CXX", "[misc]")
+{
+    is_tls_class_destructor_called = false;
+    s_slow_init_sem = xSemaphoreCreateCounting(1, 0);
+    xTaskCreate(test_thread_local_destructors, "test_thread_local_destructors", 2048, NULL, 10, NULL);
+    vTaskDelay(1); /* Triggers IDLE task to call prvCheckTasksWaitingTermination() which cleans task-specific data */
+    TEST_ASSERT_TRUE(xSemaphoreTake(s_slow_init_sem, 500 / portTICK_PERIOD_MS));
+    vSemaphoreDelete(s_slow_init_sem);
+    TEST_ASSERT_TRUE(is_tls_class_destructor_called);
 }
 
 /* These test cases pull a lot of code from libstdc++ and are disabled for now
@@ -277,7 +307,7 @@ static void recur_and_smash_cxx()
 {
     static int cnt;
     volatile uint8_t buf[50];
-    volatile int num = sizeof(buf)+10;
+    volatile int num = sizeof(buf) + 10;
 
     if (cnt++ < 1) {
         recur_and_smash_cxx();
@@ -292,8 +322,32 @@ TEST_CASE("stack smashing protection CXX", "[stack_smash]")
     recur_and_smash_cxx();
 }
 
+TEST_CASE("test std::this_thread::sleep_for basic functionality", "[misc]")
+{
+    const int us_per_tick = portTICK_PERIOD_MS * 1000;
+
+    // Test sub-tick sleep
+    const auto short_sleep = std::chrono::microseconds(us_per_tick / 4);
+    int64_t start = esp_timer_get_time();
+    std::this_thread::sleep_for(short_sleep);
+    int64_t end = esp_timer_get_time();
+    int64_t elapsed_us = end - start;
+    printf("short sleep: %lld us\n", elapsed_us);
+    TEST_ASSERT_GREATER_OR_EQUAL(short_sleep.count(), elapsed_us);
+
+    // Test multi-tick sleep
+    const auto long_sleep = std::chrono::microseconds(us_per_tick * 2);
+    start = esp_timer_get_time();
+    std::this_thread::sleep_for(long_sleep);
+    end = esp_timer_get_time();
+    elapsed_us = end - start;
+    printf("long sleep: %lld us\n", elapsed_us);
+    TEST_ASSERT_GREATER_OR_EQUAL(long_sleep.count(), elapsed_us);
+}
+
 extern "C" void app_main(void)
 {
+    s_testTLS.foo(); /* allocates memory that will be reused */
     printf("CXX GENERAL TEST\n");
     unity_run_menu();
 }

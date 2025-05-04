@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <stddef.h>
 #include "soc/spi_periph.h"
-#include "stddef.h"
 
 /*
  Bunch of constants for every SPI peripheral: GPIO signals, irqs, hw addr of registers etc
@@ -33,7 +33,6 @@ const spi_signal_conn_t spi_periph_signal[SOC_SPI_PERIPH_NUM] = {
         .spics0_iomux_pin = -1,
         .irq = -1,
         .irq_dma = -1,
-        .module = -1,
         .hw = NULL,
         .func = -1,
     }, {
@@ -57,7 +56,6 @@ const spi_signal_conn_t spi_periph_signal[SOC_SPI_PERIPH_NUM] = {
         .spics0_iomux_pin = SPI2_IOMUX_PIN_NUM_CS,
         .irq = ETS_SPI2_INTR_SOURCE,
         .irq_dma = -1,
-        .module = PERIPH_SPI2_MODULE,
         .hw = &GPSPI2,
         .func = SPI2_FUNC_NUM,
     }

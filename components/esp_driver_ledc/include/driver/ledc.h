@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -34,6 +34,18 @@ extern "C" {
 #define LEDC_ERR_VAL            (-1)
 
 /**
+ * @brief Strategies to be applied to the LEDC channel during system Light-sleep period
+ */
+typedef enum {
+    LEDC_SLEEP_MODE_NO_ALIVE_NO_PD = 0,  /*!< The default mode: no LEDC output, and no power off the LEDC power domain. */
+    LEDC_SLEEP_MODE_NO_ALIVE_ALLOW_PD,   /*!< The low-power-consumption mode: no LEDC output, and allow to power off the LEDC power domain.
+                                              This can save power, but at the expense of more RAM being consumed to save register context.
+                                              This option is only available on targets that support TOP domain to be powered down. */
+    LEDC_SLEEP_MODE_KEEP_ALIVE,          /*!< The high-power-consumption mode: keep LEDC output when the system enters Light-sleep. */
+    LEDC_SLEEP_MODE_INVALID,             /*!< Invalid LEDC sleep mode strategy */
+} ledc_sleep_mode_t;
+
+/**
  * @brief Configuration parameters of LEDC channel for ledc_channel_config function
  */
 typedef struct {
@@ -44,6 +56,7 @@ typedef struct {
     ledc_timer_t timer_sel;         /*!< Select the timer source of channel (0 - LEDC_TIMER_MAX-1) */
     uint32_t duty;                  /*!< LEDC channel duty, the range of duty setting is [0, (2**duty_resolution)] */
     int hpoint;                     /*!< LEDC channel hpoint value, the range is [0, (2**duty_resolution)-1] */
+    ledc_sleep_mode_t sleep_mode;   /*!< choose the desired behavior for the LEDC channel in Light-sleep */
     struct {
         unsigned int output_invert: 1;/*!< Enable (1) or disable (0) gpio output invert */
     } flags;                        /*!< LEDC flags */
@@ -175,13 +188,13 @@ esp_err_t ledc_update_duty(ledc_mode_t speed_mode, ledc_channel_t channel);
  *
  * @param  gpio_num The LEDC output gpio
  * @param  speed_mode Select the LEDC channel group with specified speed mode. Note that not all targets support high speed mode.
- * @param  ledc_channel LEDC channel (0 - LEDC_CHANNEL_MAX-1), select from ledc_channel_t
+ * @param  channel LEDC channel (0 - LEDC_CHANNEL_MAX-1), select from ledc_channel_t
  *
  * @return
  *     - ESP_OK Success
  *     - ESP_ERR_INVALID_ARG Parameter error
  */
-esp_err_t ledc_set_pin(int gpio_num, ledc_mode_t speed_mode, ledc_channel_t ledc_channel);
+esp_err_t ledc_set_pin(int gpio_num, ledc_mode_t speed_mode, ledc_channel_t channel);
 
 /**
  * @brief LEDC stop.
@@ -337,7 +350,13 @@ esp_err_t ledc_set_fade(ledc_mode_t speed_mode, ledc_channel_t channel, uint32_t
 esp_err_t ledc_isr_register(void (*fn)(void *), void *arg, int intr_alloc_flags, ledc_isr_handle_t *handle);
 
 /**
- * @brief Configure LEDC settings
+ * @brief Configure LEDC timer settings
+ *
+ * This function does not take care of whether the chosen clock source is enabled or not, also does not handle the clock source
+ * to meet channel sleep mode choice.
+ *
+ * If the chosen clock source is a new clock source to the LEDC timer, please use `ledc_timer_config`;
+ * If the clock source is kept to be the same, but frequency needs to be updated, please use `ledc_set_freq`.
  *
  * @param speed_mode Select the LEDC channel group with specified speed mode. Note that not all targets support high speed mode.
  * @param timer_sel  Timer index (0-3), there are 4 timers in LEDC module
@@ -349,7 +368,7 @@ esp_err_t ledc_isr_register(void (*fn)(void *), void *arg, int intr_alloc_flags,
  *     - (-1) Parameter error
  *     - Other Current LEDC duty
  */
-esp_err_t ledc_timer_set(ledc_mode_t speed_mode, ledc_timer_t timer_sel, uint32_t clock_divider, uint32_t duty_resolution, ledc_clk_src_t clk_src);
+esp_err_t ledc_timer_set(ledc_mode_t speed_mode, ledc_timer_t timer_sel, uint32_t clock_divider, uint32_t duty_resolution, ledc_clk_src_t clk_src) __attribute__((deprecated("Please use ledc_timer_config() or ledc_set_freq()")));
 
 /**
  * @brief Reset LEDC timer
@@ -439,7 +458,18 @@ esp_err_t ledc_set_fade_with_step(ledc_mode_t speed_mode, ledc_channel_t channel
  * @param speed_mode Select the LEDC channel group with specified speed mode. Note that not all targets support high speed mode.
  * @param channel LEDC channel index (0 - LEDC_CHANNEL_MAX-1), select from ledc_channel_t
  * @param target_duty Target duty of fading [0, (2**duty_resolution)]
- * @param max_fade_time_ms The maximum time of the fading ( ms ).
+ * @param desired_fade_time_ms The intended time of the fading ( ms ).
+ *                             Note that the actual time it takes to complete the fade could vary by a factor of up to 2x shorter
+ *                             or longer than the expected time due to internal rounding errors in calculations.
+ *                             Specifically:
+ *                             * The total number of cycles (total_cycle_num = desired_fade_time_ms * freq / 1000)
+ *                             * The difference in duty cycle (duty_delta = |target_duty - current_duty|)
+ *                             The fade may complete faster than expected if total_cycle_num larger than duty_delta. Conversely,
+ *                             it may take longer than expected if total_cycle_num is less than duty_delta.
+ *                             The closer the ratio of total_cycle_num/duty_delta (or its inverse) is to a whole number (the floor value),
+ *                             the more accurately the actual fade duration will match the intended time.
+ *                             If an exact fade time is expected, please consider to split the entire fade into several smaller linear fades.
+ *                             The split should make each fade step has a divisible total_cycle_num/duty_delta (or its inverse) ratio.
  *
  * @return
  *     - ESP_OK Success
@@ -447,7 +477,7 @@ esp_err_t ledc_set_fade_with_step(ledc_mode_t speed_mode, ledc_channel_t channel
  *     - ESP_ERR_INVALID_STATE Channel not initialized
  *     - ESP_FAIL Fade function init error
  */
-esp_err_t ledc_set_fade_with_time(ledc_mode_t speed_mode, ledc_channel_t channel, uint32_t target_duty, int max_fade_time_ms);
+esp_err_t ledc_set_fade_with_time(ledc_mode_t speed_mode, ledc_channel_t channel, uint32_t target_duty, int desired_fade_time_ms);
 
 /**
  * @brief Install LEDC fade function. This function will occupy interrupt of LEDC module.
@@ -491,11 +521,11 @@ esp_err_t ledc_fade_start(ledc_mode_t speed_mode, ledc_channel_t channel, ledc_f
 
 #if SOC_LEDC_SUPPORT_FADE_STOP
 /**
- * @brief Stop LEDC fading. The duty of the channel is garanteed to be fixed at most one PWM cycle after the function returns.
+ * @brief Stop LEDC fading. The duty of the channel is guaranteed to be fixed at most one PWM cycle after the function returns.
  *
  * @note  This API can be called if a new fixed duty or a new fade want to be set while the last fade operation is still running in progress.
  * @note  Call this API will abort the fading operation only if it was started by calling ledc_fade_start with LEDC_FADE_NO_WAIT mode.
- * @note  If a fade was started with LEDC_FADE_WAIT_DONE mode, calling this API afterwards has no use in stopping the fade. Fade will continue until it reachs the target duty.
+ * @note  If a fade was started with LEDC_FADE_WAIT_DONE mode, calling this API afterwards has no use in stopping the fade. Fade will continue until it reaches the target duty.
  *
  * @param speed_mode Select the LEDC channel group with specified speed mode. Note that not all targets support high speed mode.
  * @param channel LEDC channel number
@@ -538,7 +568,18 @@ esp_err_t ledc_set_duty_and_update(ledc_mode_t speed_mode, ledc_channel_t channe
  * @param speed_mode Select the LEDC channel group with specified speed mode. Note that not all targets support high speed mode.
  * @param channel LEDC channel index (0 - LEDC_CHANNEL_MAX-1), select from ledc_channel_t
  * @param target_duty Target duty of fading [0, (2**duty_resolution)]
- * @param max_fade_time_ms The maximum time of the fading ( ms ).
+ * @param desired_fade_time_ms The intended time of the fading ( ms ).
+ *                             Note that the actual time it takes to complete the fade could vary by a factor of up to 2x shorter
+ *                             or longer than the expected time due to internal rounding errors in calculations.
+ *                             Specifically:
+ *                             * The total number of cycles (total_cycle_num = desired_fade_time_ms * freq / 1000)
+ *                             * The difference in duty cycle (duty_delta = |target_duty - current_duty|)
+ *                             The fade may complete faster than expected if total_cycle_num larger than duty_delta. Conversely,
+ *                             it may take longer than expected if total_cycle_num is less than duty_delta.
+ *                             The closer the ratio of total_cycle_num/duty_delta (or its inverse) is to a whole number (the floor value),
+ *                             the more accurately the actual fade duration will match the intended time.
+ *                             If an exact fade time is expected, please consider to split the entire fade into several smaller linear fades.
+ *                             The split should make each fade step has a divisible total_cycle_num/duty_delta (or its inverse) ratio.
  * @param fade_mode choose blocking or non-blocking mode
  *
  * @return
@@ -547,7 +588,7 @@ esp_err_t ledc_set_duty_and_update(ledc_mode_t speed_mode, ledc_channel_t channe
  *     - ESP_ERR_INVALID_STATE Channel not initialized
  *     - ESP_FAIL Fade function init error
  */
-esp_err_t ledc_set_fade_time_and_start(ledc_mode_t speed_mode, ledc_channel_t channel, uint32_t target_duty, uint32_t max_fade_time_ms, ledc_fade_mode_t fade_mode);
+esp_err_t ledc_set_fade_time_and_start(ledc_mode_t speed_mode, ledc_channel_t channel, uint32_t target_duty, uint32_t desired_fade_time_ms, ledc_fade_mode_t fade_mode);
 
 /**
  * @brief A thread-safe API to set and start LEDC fade function.

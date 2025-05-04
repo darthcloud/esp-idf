@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "sdkconfig.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,7 +24,11 @@ extern "C" {
  * @brief Structure holding PHY init parameters
  */
 typedef struct {
-	uint8_t params[128];                    /*!< opaque PHY initialization parameters */
+#if CONFIG_IDF_TARGET_ESP32C5
+    uint8_t params[256];                    /*!< opaque PHY initialization parameters */
+#else
+    uint8_t params[128];                    /*!< opaque PHY initialization parameters */
+#endif
 } esp_phy_init_data_t;
 
 /**
@@ -33,6 +38,7 @@ typedef enum {
     PHY_MODEM_WIFI       = 1,       /*!< PHY modem WIFI       */
     PHY_MODEM_BT         = 2,       /*!< PHY modem BT         */
     PHY_MODEM_IEEE802154 = 4,       /*!< PHY modem IEEE802154 */
+    PHY_MODEM_MAX,                  /*!< Don't use it. Used by ESP_PHY_MODEM_COUNT_MAX */
 } esp_phy_modem_t;
 
 /**
@@ -181,7 +187,7 @@ void esp_btbb_enable(void);
 /**
  * @brief Disable BTBB module
  *
- * Dsiable BTBB module, used by IEEE802154 or Bluetooth.
+ * Disable BTBB module, used by IEEE802154 or Bluetooth.
  * Users should not call this API in their application.
  *
  */
@@ -280,6 +286,33 @@ void phy_init_param_set(uint8_t param);
  * @param enable True for enable wifi receiving mode as default, false for closing wifi receiving mode as default.
  */
 void phy_wifi_enable_set(uint8_t enable);
+
+#if CONFIG_ESP_PHY_RECORD_USED_TIME
+/**
+ * @brief Get phy used time from different modem
+ * @param used_time pointer of variable to get used time, in microseconds
+ * @param modem modem type
+ * @return ESP_ERR_INVALID_ARG on incorrect modem type.
+ */
+esp_err_t phy_query_used_time(uint64_t *used_time, esp_phy_modem_t modem);
+
+/**
+ * @brief Clear phy used time for different modem
+ * @param modem modem type
+ * @return ESP_ERR_INVALID_ARG on incorrect modem type.
+ */
+esp_err_t phy_clear_used_time(esp_phy_modem_t modem);
+#endif
+
+/**
+ * @brief Power on Bluetooth Wi-Fi power domain
+ */
+void esp_wifi_bt_power_domain_on(void);
+
+/**
+ * @brief Power off Bluetooth Wi-Fi power domain
+ */
+void esp_wifi_bt_power_domain_off(void);
 
 #ifdef __cplusplus
 }

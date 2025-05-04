@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -59,6 +59,7 @@ extern "C" {
 #define ADC_LL_DEFAULT_CONV_LIMIT_EN      0
 #define ADC_LL_DEFAULT_CONV_LIMIT_NUM     10
 
+#define ADC_LL_POWER_MANAGE_SUPPORTED     1 //ESP32C6 supported to manage power mode
 /*---------------------------------------------------------------
                     PWDET (Power Detect)
 ---------------------------------------------------------------*/
@@ -127,7 +128,7 @@ static inline void adc_ll_digi_set_fsm_time(uint32_t rst_wait, uint32_t start_wa
  */
 static inline void adc_ll_set_sample_cycle(uint32_t sample_cycle)
 {
-    /* Peripheral reg i2c has powered up in rtc_init, write directly */
+    /* Analog i2c master clock needs to be enabled for regi2c operations (done inside REGI2C_WRITE_MASK) */
     REGI2C_WRITE_MASK(I2C_SAR_ADC, ADC_SAR1_SAMPLE_CYCLE_ADDR, sample_cycle);
 }
 
@@ -220,6 +221,15 @@ static inline void adc_ll_digi_set_pattern_table(adc_unit_t adc_n, uint32_t patt
         tab |= ((uint32_t)(pattern.val & 0x3F) << 18) >> offset;    // Fill in the new data
         APB_SARADC.saradc_sar_patt_tab2.saradc_saradc_sar_patt_tab2 = tab;         // Write back
     }
+}
+
+/**
+ * Rest pattern table to default value
+ */
+static inline void adc_ll_digi_reset_pattern_table(void)
+{
+    APB_SARADC.saradc_sar_patt_tab1.saradc_saradc_sar_patt_tab1 = 0xffffff;
+    APB_SARADC.saradc_sar_patt_tab2.saradc_saradc_sar_patt_tab2 = 0xffffff;
 }
 
 /**
@@ -554,13 +564,44 @@ static inline uint32_t adc_ll_pwdet_get_cct(void)
 /*---------------------------------------------------------------
                     Common setting
 ---------------------------------------------------------------*/
+
+/**
+ * @brief Enable the ADC clock
+ * @param enable true to enable, false to disable
+ */
+static inline void adc_ll_enable_bus_clock(bool enable)
+{
+    PCR.saradc_conf.saradc_reg_clk_en = enable;
+}
+
+/**
+ * @brief Enable the ADC function clock
+ * @param enable true to enable, false to disable
+ */
+static inline void adc_ll_enable_func_clock(bool enable)
+{
+    PCR.saradc_clkm_conf.saradc_clkm_en = enable;
+}
+
+/**
+ * @brief Reset ADC module
+ */
+static inline void adc_ll_reset_register(void)
+{
+    PCR.saradc_conf.saradc_rst_en = 1;
+    PCR.saradc_conf.saradc_rst_en = 0;
+    PCR.saradc_conf.saradc_reg_rst_en = 1;
+    PCR.saradc_conf.saradc_reg_rst_en = 0;
+}
+
 /**
  * Set ADC module power management.
  *
  * @param manage Set ADC power status.
  */
-static inline void adc_ll_set_power_manage(adc_ll_power_t manage)
+static inline void adc_ll_set_power_manage(adc_unit_t adc_n, adc_ll_power_t manage)
 {
+    (void) adc_n;
     /* Bit1  0:Fsm  1: SW mode
        Bit0  0:SW mode power down  1: SW mode power on */
     if (manage == ADC_LL_POWER_SW_ON) {
@@ -580,6 +621,10 @@ static inline void adc_ll_set_controller(adc_unit_t adc_n, adc_ll_controller_t c
 {
     //Not used on ESP32C6
 }
+
+/*---------------------------------------------------------------
+                    Calibration
+---------------------------------------------------------------*/
 
 /* ADC calibration code. */
 /**
@@ -633,11 +678,81 @@ static inline void adc_ll_calibration_finish(adc_unit_t adc_n)
 __attribute__((always_inline))
 static inline void adc_ll_set_calibration_param(adc_unit_t adc_n, uint32_t param)
 {
-    HAL_ASSERT(adc_n == ADC_UNIT_1);
     uint8_t msb = param >> 8;
     uint8_t lsb = param & 0xFF;
-    REGI2C_WRITE_MASK(I2C_SAR_ADC, ADC_SAR1_INITIAL_CODE_HIGH_ADDR, msb);
-    REGI2C_WRITE_MASK(I2C_SAR_ADC, ADC_SAR1_INITIAL_CODE_LOW_ADDR, lsb);
+
+    if (adc_n == ADC_UNIT_1) {
+        REGI2C_WRITE_MASK(I2C_SAR_ADC, ADC_SAR1_INITIAL_CODE_HIGH_ADDR, msb);
+        REGI2C_WRITE_MASK(I2C_SAR_ADC, ADC_SAR1_INITIAL_CODE_LOW_ADDR, lsb);
+    } else {
+        //C6 doesn't support ADC2, here is for backward compatibility for RNG
+        REGI2C_WRITE_MASK(I2C_SAR_ADC, ADC_SAR2_INITIAL_CODE_HIGH_ADDR, msb);
+        REGI2C_WRITE_MASK(I2C_SAR_ADC, ADC_SAR2_INITIAL_CODE_LOW_ADDR, lsb);
+    }
+}
+
+/**
+ * Set the SAR DTEST param
+ *
+ * @param param DTEST value
+ */
+__attribute__((always_inline))
+static inline void adc_ll_set_dtest_param(uint32_t param)
+{
+    REGI2C_WRITE_MASK(I2C_SAR_ADC, ADC_SARADC_DTEST_RTC_ADDR, param);
+}
+
+/**
+ * Set the SAR ENT param
+ *
+ * @param param ENT value
+ */
+__attribute__((always_inline))
+static inline void adc_ll_set_ent_param(uint32_t param)
+{
+    REGI2C_WRITE_MASK(I2C_SAR_ADC, ADC_SARADC_ENT_RTC_ADDR, param);
+}
+
+/**
+ * Enable/disable the calibration voltage reference for ADC unit.
+ *
+ * @param adc_n ADC index number.
+ * @param en true to enable, false to disable
+ */
+__attribute__((always_inline))
+static inline void adc_ll_enable_calibration_ref(adc_unit_t adc_n, bool en)
+{
+    //C6 doesn't support ADC2, here is for backward compatibility for RNG
+    if (adc_n == ADC_UNIT_1) {
+        REGI2C_WRITE_MASK(I2C_SAR_ADC, ADC_SARADC1_ENCAL_REF_ADDR, en);
+    } else {
+        REGI2C_WRITE_MASK(I2C_SAR_ADC, ADC_SARADC2_ENCAL_REF_ADDR, en);
+    }
+}
+
+/**
+ * Init regi2c SARADC registers
+ */
+__attribute__((always_inline))
+static inline void adc_ll_regi2c_init(void)
+{
+    adc_ll_set_dtest_param(2);
+    adc_ll_set_ent_param(1);
+    // Config ADC circuit (Analog part) with I2C(HOST ID 0x69) and chose internal voltage as sampling source
+    adc_ll_enable_calibration_ref(ADC_UNIT_1, true);
+    adc_ll_enable_calibration_ref(ADC_UNIT_2, true);
+}
+
+/**
+ * Deinit regi2c SARADC registers
+ */
+__attribute__((always_inline))
+static inline void adc_ll_regi2c_adc_deinit(void)
+{
+    adc_ll_set_dtest_param(0);
+    adc_ll_set_ent_param(0);
+    adc_ll_enable_calibration_ref(ADC_UNIT_1, false);
+    adc_ll_enable_calibration_ref(ADC_UNIT_2, false);
 }
 
 /*---------------------------------------------------------------

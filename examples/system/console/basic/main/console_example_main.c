@@ -91,8 +91,13 @@ void app_main(void)
     /* Register commands */
     esp_console_register_help_command();
     register_system_common();
-    register_system_sleep();
-#if SOC_WIFI_SUPPORTED
+#if SOC_LIGHT_SLEEP_SUPPORTED
+    register_system_light_sleep();
+#endif
+#if SOC_DEEP_SLEEP_SUPPORTED
+    register_system_deep_sleep();
+#endif
+#if (CONFIG_ESP_WIFI_ENABLED || CONFIG_ESP_HOST_WIFI_ENABLED)
     register_wifi();
 #endif
     register_nvs();

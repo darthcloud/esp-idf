@@ -52,22 +52,29 @@ Supported since ESP-IDF v4.2.
 
 | Release branch         | Recommended | Required |
 |------------------------|-------------|----------|
-| release/v4.2           | v4.2.3      | v4.2     |
-| release/v4.3           | v4.3.3      | v4.3     |
-| release/v4.4           | v4.4.6      | v4.4     |
-| release/v5.0           | v5.0.4      | v5.0     |
-| release/v5.1           | v5.1.2      | v5.1     |
-| release/v5.2 and above | v5.2        | v5.2     |
+| release/v4.2           | v4.2.3+     | v4.2     |
+| release/v4.3           | v4.3.3+     | v4.3     |
+| release/v4.4           | v4.4.6+     | v4.4     |
+| release/v5.0           | v5.0.4+     | v5.0     |
+| release/v5.1           | v5.1.2+     | v5.1     |
+| release/v5.2 and above | v5.2+       | v5.2     |
 
 ### ESP32-C3
 
-#### v0.2, v0.3
+#### v0.2 - v0.4
 
 Supported since ESP-IDF v4.3.
 
-#### v0.4
+#### v1.1
 
-To be added.
+| Release branch         | Recommended | Required |
+|------------------------|-------------|----------|
+| release/v4.2           | EOL         | EOL      |
+| release/v4.3           | v4.3.7+     | v4.3.7   |
+| release/v4.4           | v4.4.7+     | v4.4.7   |
+| release/v5.0           | v5.0.5+     | v5.0.5   |
+| release/v5.1           | v5.1.3+     | v5.1.3   |
+| release/v5.2 and above | v5.2+       | v5.2     |
 
 ### ESP32-S3
 
@@ -77,17 +84,30 @@ Supported since ESP-IDF v4.4.
 
 ### ESP32-C2 & ESP8684
 
-#### v1.0
+#### v1.0, v1.1
 
 Supported since ESP-IDF v5.0.
 
-#### v1.1
-
-To be added.
-
 #### v1.2
 
-To be added.
+| Release branch         | Recommended | Required |
+|------------------------|-------------|----------|
+| release/v5.0           | v5.0.7+     | v5.0     |
+| release/v5.1           | v5.1.4+     | v5.1     |
+| release/v5.2           | v5.2.2+     | v5.2     |
+| release/v5.3 and above | v5.3+       | v5.3     |
+
+#### v2.0
+
+| Release branch         | Recommended | Required |
+|------------------------|-------------|----------|
+| release/v5.0           | v5.0.8+     | v5.0.8   |
+| release/v5.1           | v5.1.5+     | v5.1.5*  |
+| release/v5.2           | v5.2.4+     | v5.2.4   |
+| release/v5.3           | v5.3.2+     | v5.3.2*  |
+| release/v5.4 and above | v5.4+       | v5.4     |
+
+Note: IDF v5.1.5 and v5.3.2 are compatible with C2 v2.0. However the chip revision check hasn't been updated on these releases. Enable `ESP32C2_REV2_DEVELOPMENT` config to bypass the outdated check.
 
 ### ESP32-C6
 
@@ -95,11 +115,29 @@ To be added.
 
 Supported since ESP-IDF v5.1.
 
+#### v0.2
+
+| Release branch         | Recommended | Required |
+|------------------------|-------------|----------|
+| release/v5.1           | v5.1.4+     | v5.1     |
+| release/v5.2           | v5.2.2+     | v5.2     |
+| release/v5.3 and above | v5.3+       | v5.3     |
+
 ### ESP32-H2
 
 #### v0.1, v0.2
 
 Supported since ESP-IDF v5.1.
+
+#### v1.2
+
+| Release branch         | Recommended | Required |
+|------------------------|-------------|----------|
+| release/v5.1           | v5.1.6+     | v5.1.6   |
+| release/v5.2           | v5.2.5+     | v5.2.5   |
+| release/v5.3           | v5.3.3+     | v5.3.3   |
+| release/v5.4           | v5.4.1+     | v5.4.1   |
+| release/v5.5 and above | v5.5+       | v5.5     |
 
 ## What If the ESP-IDF Version Is Lower than the `Required` Version?
 

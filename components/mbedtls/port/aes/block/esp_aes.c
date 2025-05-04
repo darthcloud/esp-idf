@@ -31,14 +31,16 @@
 #include "esp_log.h"
 #include "aes/esp_aes.h"
 #include "soc/hwcrypto_periph.h"
+#include "soc/soc_caps.h"
 #include <sys/lock.h>
 #include "hal/aes_hal.h"
-#include "aes/esp_aes_internal.h"
+#include "hal/aes_ll.h"
+#include "esp_aes_internal.h"
 
 #include <freertos/FreeRTOS.h>
 
 #include <stdio.h>
-#include "esp_private/periph_ctrl.h"
+#include "esp_private/esp_crypto_lock_internal.h"
 
 
 static const char *TAG = "esp-aes";
@@ -58,13 +60,18 @@ void esp_aes_acquire_hardware( void )
     portENTER_CRITICAL(&aes_spinlock);
 
     /* Enable AES hardware */
-    periph_module_enable(PERIPH_AES_MODULE);
+    AES_RCC_ATOMIC() {
+        aes_ll_enable_bus_clock(true);
+        aes_ll_reset_register();
+    }
 }
 
 void esp_aes_release_hardware( void )
 {
     /* Disable AES hardware */
-    periph_module_disable(PERIPH_AES_MODULE);
+    AES_RCC_ATOMIC() {
+        aes_ll_enable_bus_clock(false);
+    }
 
     portEXIT_CRITICAL(&aes_spinlock);
 }
@@ -98,6 +105,10 @@ static int esp_aes_block(esp_aes_context *ctx, const void *input, void *output)
     i1 = input_words[1];
     i2 = input_words[2];
     i3 = input_words[3];
+
+#ifdef CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC
+    esp_aes_enable_pseudo_rounds(CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC_STRENGTH);
+#endif /* CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC */
 
     aes_hal_transform_block(input, output);
 

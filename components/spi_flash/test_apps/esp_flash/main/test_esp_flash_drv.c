@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -15,25 +15,23 @@
 #include "esp_private/spi_common_internal.h"
 #include "esp_flash_spi_init.h"
 #include "memspi_host_driver.h"
-#include "spi_flash_mmap.h"
 #include <esp_attr.h>
 #include "esp_log.h"
 #include "test_utils.h"
 #include "unity.h"
 #include "driver/gpio.h"
+#include "esp_private/gpio.h"
 #include "soc/io_mux_reg.h"
 #include "sdkconfig.h"
 
+#include "esp_spi_flash_counters.h"
 #include "esp_partition.h"
 #include "esp_rom_gpio.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "test_esp_flash_def.h"
-#include "spi_flash_mmap.h"
 #include "esp_private/spi_flash_os.h"
 #include "ccomp_timer.h"
-
-#define FUNC_SPI    1
 
 static uint8_t sector_buf[4096];
 
@@ -102,10 +100,10 @@ static void setup_bus(spi_host_device_t host_id)
         //Initialize the WP and HD pins, which are not automatically initialized on ESP32-S2.
         int wp_pin = spi_periph_signal[host_id].spiwp_iomux_pin;
         int hd_pin = spi_periph_signal[host_id].spihd_iomux_pin;
-        gpio_iomux_in(wp_pin, spi_periph_signal[host_id].spiwp_in);
-        gpio_iomux_out(wp_pin, spi_periph_signal[host_id].func, false);
-        gpio_iomux_in(hd_pin, spi_periph_signal[host_id].spihd_in);
-        gpio_iomux_out(hd_pin, spi_periph_signal[host_id].func, false);
+        gpio_iomux_input(wp_pin, spi_periph_signal[host_id].func, spi_periph_signal[host_id].spiwp_in);
+        gpio_iomux_output(wp_pin, spi_periph_signal[host_id].func);
+        gpio_iomux_input(hd_pin, spi_periph_signal[host_id].func, spi_periph_signal[host_id].spihd_in);
+        gpio_iomux_output(hd_pin, spi_periph_signal[host_id].func);
 #endif //CONFIG_ESPTOOLPY_FLASHMODE_QIO || CONFIG_ESPTOOLPY_FLASHMODE_QOUT
         //currently the SPI bus for main flash chip is initialized through GPIO matrix
     } else if (host_id == SPI2_HOST) {
@@ -598,7 +596,11 @@ TEST_CASE_MULTI_FLASH_IGNORE("Test esp_flash_write can toggle QE bit", test_togg
 #endif //CONFIG_ESPTOOLPY_OCT_FLASH
 
 // This table could be chip specific in the future.
+#if CONFIG_IDF_TARGET_ESP32C2
+uint8_t flash_frequency_table[5] = {5, 10, 20, 40};
+#else
 uint8_t flash_frequency_table[6] = {5, 10, 20, 26, 40, 80};
+#endif
 #define TEST_FLASH_SPEED_MIN 5
 void test_permutations_part(const flashtest_config_t* config, esp_partition_t* part, void* source_buf, size_t length)
 {
@@ -658,7 +660,7 @@ void test_permutations_chip(const flashtest_config_t* config)
     // Get test partition, and locate temporary partitions according to the default one
     const esp_partition_t* test_part = get_test_data_partition();
     const int length = sizeof(large_const_buffer);
-    TEST_ASSERT(test_part->size > length + 2 + SPI_FLASH_SEC_SIZE);
+    TEST_ASSERT(test_part->size > length + 2 + test_part->erase_size);
 
     esp_partition_t part[2] = {};
     part[0] = *test_part;
@@ -740,7 +742,7 @@ static void write_large_buffer(const esp_partition_t *part, const uint8_t *sourc
     esp_flash_t* chip = part->flash_chip;
 
     printf("Writing chip %p %p, %u bytes from source %p\n", chip, (void*)part->address, length, source);
-    ESP_ERROR_CHECK( esp_flash_erase_region(chip, part->address, (length + SPI_FLASH_SEC_SIZE) & ~(SPI_FLASH_SEC_SIZE - 1)) );
+    ESP_ERROR_CHECK( esp_flash_erase_region(chip, part->address, (length + part->erase_size) & ~(part->erase_size - 1)) );
 
     // note writing to unaligned address
     ESP_ERROR_CHECK( esp_flash_write(chip, source, part->address + 1, length) );
@@ -773,7 +775,7 @@ static void read_and_check(const esp_partition_t *part, const uint8_t *source, s
 
 static void test_write_large_buffer(const esp_partition_t* part, const uint8_t *source, size_t length)
 {
-    TEST_ASSERT(part->size > length + 2 + SPI_FLASH_SEC_SIZE);
+    TEST_ASSERT(part->size > length + 2 + part->erase_size);
 
     write_large_buffer(part, source, length);
     read_and_check(part, source, length);
@@ -806,7 +808,7 @@ static uint32_t time_measure_end(time_meas_ctx_t* ctx)
 
 static uint32_t measure_erase(const esp_partition_t* part)
 {
-    const int total_len = SPI_FLASH_SEC_SIZE * TEST_SECTORS;
+    const int total_len = part->erase_size * TEST_SECTORS;
     time_meas_ctx_t time_ctx = {.name = "erase", .len = total_len};
 
     time_measure_start(&time_ctx);
@@ -818,7 +820,7 @@ static uint32_t measure_erase(const esp_partition_t* part)
 // should called after measure_erase
 static uint32_t measure_write(const char* name, const esp_partition_t* part, const uint8_t* data_to_write, int seg_len)
 {
-    const int total_len = SPI_FLASH_SEC_SIZE;
+    const int total_len = part->erase_size;
     time_meas_ctx_t time_ctx = {.name = name, .len = total_len * TEST_TIMES};
 
     time_measure_start(&time_ctx);
@@ -841,7 +843,7 @@ static uint32_t measure_write(const char* name, const esp_partition_t* part, con
 
 static uint32_t measure_read(const char* name, const esp_partition_t* part, uint8_t* data_read, int seg_len)
 {
-    const int total_len = SPI_FLASH_SEC_SIZE;
+    const int total_len = part->erase_size;
     time_meas_ctx_t time_ctx = {.name = name, .len = total_len * TEST_TIMES};
 
     time_measure_start(&time_ctx);
@@ -898,7 +900,7 @@ static const char* get_chip_vendor(uint32_t id)
 static void test_flash_read_write_performance(const esp_partition_t *part)
 {
     esp_flash_t* chip = part->flash_chip;
-    const int total_len = SPI_FLASH_SEC_SIZE;
+    const int total_len = part->erase_size;
     uint8_t *data_to_write = heap_caps_malloc(total_len, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     uint8_t *data_read = heap_caps_malloc(total_len, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 

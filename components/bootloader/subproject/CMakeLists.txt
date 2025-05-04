@@ -32,10 +32,11 @@ set(COMPONENTS
     main
     efuse
     esp_system
-    newlib)
+    newlib
+    esp_tee)
 
-# Make EXTRA_COMPONENT_DIRS variable to point to the bootloader_components directory
-# of the project being compiled
+# EXTRA_COMPONENT_DIRS can be populated with directories containing one or several components.
+# Make sure this variable contains `bootloader_components` directory of the project being compiled.
 set(PROJECT_EXTRA_COMPONENTS "${PROJECT_SOURCE_DIR}/bootloader_components")
 if(EXISTS ${PROJECT_EXTRA_COMPONENTS})
     list(APPEND EXTRA_COMPONENT_DIRS "${PROJECT_EXTRA_COMPONENTS}")
@@ -58,14 +59,20 @@ foreach(component ${proj_components})
 endforeach()
 
 set(BOOTLOADER_BUILD 1)
+set(NON_OS_BUILD 1)
 include("${IDF_PATH}/tools/cmake/project.cmake")
 set(common_req log esp_rom esp_common esp_hw_support newlib)
 idf_build_set_property(EXTRA_COMPONENT_EXCLUDE_DIRS "${EXTRA_COMPONENT_EXCLUDE_DIRS}")
 idf_build_set_property(__COMPONENT_REQUIRES_COMMON "${common_req}")
 idf_build_set_property(__OUTPUT_SDKCONFIG 0)
+# Define a property for the default linker script
+set(LD_DEFAULT_PATH "${CMAKE_CURRENT_SOURCE_DIR}/main/ld/${IDF_TARGET}")
+idf_build_set_property(BOOTLOADER_LINKER_SCRIPT "${LD_DEFAULT_PATH}/bootloader.ld" APPEND)
+idf_build_set_property(BOOTLOADER_LINKER_SCRIPT "${LD_DEFAULT_PATH}/bootloader.rom.ld" APPEND)
 project(bootloader)
 
 idf_build_set_property(COMPILE_DEFINITIONS "BOOTLOADER_BUILD=1" APPEND)
+idf_build_set_property(COMPILE_DEFINITIONS "NON_OS_BUILD=1" APPEND)
 idf_build_set_property(COMPILE_OPTIONS "-fno-stack-protector" APPEND)
 
 idf_component_get_property(main_args esptool_py FLASH_ARGS)
@@ -207,7 +214,7 @@ elseif(CONFIG_SECURE_BOOTLOADER_REFLASHABLE)
         COMMAND ${CMAKE_COMMAND} -E echo
             "* After first boot, only re-flashes of this kind (with same key) will be accepted."
         COMMAND ${CMAKE_COMMAND} -E echo
-            "* Not recommended to re-use the same secure boot keyfile on multiple production devices."
+            "* Not recommended to reuse the same secure boot keyfile on multiple production devices."
         DEPENDS gen_secure_bootloader_key gen_bootloader_digest_bin
         VERBATIM)
 elseif(

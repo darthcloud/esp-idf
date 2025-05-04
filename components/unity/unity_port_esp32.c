@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2016-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2016-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -9,6 +9,7 @@
 #include "sdkconfig.h"
 #include "esp_cpu.h"
 #include "esp_rom_uart.h"
+#include "esp_system_console.h"
 #include "esp_private/esp_clk.h"
 
 static uint32_t s_test_start, s_test_stop;
@@ -16,17 +17,19 @@ static uint32_t s_test_start, s_test_stop;
 void unity_putc(int c)
 {
     if (c == '\n') {
-        esp_rom_output_tx_one_char('\r');
-        esp_rom_output_tx_one_char('\n');
+        esp_system_console_put_char('\r');
+        esp_system_console_put_char('\n');
     } else if (c == '\r') {
     } else {
-        esp_rom_output_tx_one_char(c);
+        esp_system_console_put_char(c);
     }
 }
 
 void unity_flush(void)
 {
-    esp_rom_output_tx_wait_idle(CONFIG_ESP_CONSOLE_ROM_SERIAL_PORT_NUM);
+    if(CONFIG_ESP_CONSOLE_ROM_SERIAL_PORT_NUM != -1) {
+        esp_rom_output_tx_wait_idle(CONFIG_ESP_CONSOLE_ROM_SERIAL_PORT_NUM);
+    }
 }
 
 #define iscontrol(c) ((c) <= '\x1f' || (c) == '\x7f')

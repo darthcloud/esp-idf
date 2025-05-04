@@ -1,34 +1,17 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <stdlib.h>
-#include <string.h>
-#include <sys/cdefs.h>
-#include <sys/param.h>
-#include "sdkconfig.h"
-#if CONFIG_RMT_ENABLE_DEBUG_LOG
-// The local log level must be defined before including esp_log.h
-// Set the maximum log level for this source file
-#define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
-#endif
-#include "esp_log.h"
-#include "esp_check.h"
 #include "esp_rom_gpio.h"
-#include "soc/rmt_periph.h"
+#include "esp_memory_utils.h"
 #include "soc/rtc.h"
-#include "hal/rmt_ll.h"
 #include "hal/gpio_hal.h"
-#include "hal/cache_hal.h"
-#include "hal/cache_ll.h"
+#include "esp_cache.h"
 #include "driver/gpio.h"
 #include "driver/rmt_tx.h"
 #include "rmt_private.h"
-#include "esp_memory_utils.h"
-
-static const char *TAG = "rmt";
 
 struct rmt_sync_manager_t {
     rmt_group_t *group;    // which group the synchro belongs to
@@ -49,16 +32,58 @@ static bool rmt_dma_tx_eof_cb(gdma_channel_handle_t dma_chan, gdma_event_data_t 
 
 static esp_err_t rmt_tx_init_dma_link(rmt_tx_channel_t *tx_channel, const rmt_tx_channel_config_t *config)
 {
-    // For simplicity, the encoder will access the dma_mem_base in a non-cached way
-    // and we allocate the dma_mem_base from the internal SRAM for performance
-    uint32_t data_cache_line_size = cache_hal_get_cache_line_size(CACHE_LL_LEVEL_INT_MEM, CACHE_TYPE_DATA);
-    // the alignment should meet both the DMA and cache requirement
-    size_t alignment = MAX(data_cache_line_size, sizeof(rmt_symbol_word_t));
-    rmt_symbol_word_t *dma_mem_base = heap_caps_aligned_calloc(alignment, config->mem_block_symbols, sizeof(rmt_symbol_word_t),
+    gdma_channel_alloc_config_t dma_chan_config = {
+        .direction = GDMA_CHANNEL_DIRECTION_TX,
+#if CONFIG_RMT_TX_ISR_CACHE_SAFE
+        .flags.isr_cache_safe = true,
+#endif
+    };
+    ESP_RETURN_ON_ERROR(gdma_new_ahb_channel(&dma_chan_config, &tx_channel->base.dma_chan), TAG, "allocate TX DMA channel failed");
+    gdma_strategy_config_t gdma_strategy_conf = {
+        .auto_update_desc = true,
+        .owner_check = true,
+    };
+    gdma_apply_strategy(tx_channel->base.dma_chan, &gdma_strategy_conf);
+    gdma_transfer_config_t transfer_cfg = {
+        .access_ext_mem = false, // for performance, we don't use external memory as the DMA buffer
+        .max_data_burst_size = 32,
+    };
+    ESP_RETURN_ON_ERROR(gdma_config_transfer(tx_channel->base.dma_chan, &transfer_cfg), TAG, "config DMA transfer failed");
+    gdma_tx_event_callbacks_t cbs = {
+        .on_trans_eof = rmt_dma_tx_eof_cb,
+    };
+    // register the DMA callbacks may fail if the interrupt service can not be installed successfully
+    ESP_RETURN_ON_ERROR(gdma_register_tx_event_callbacks(tx_channel->base.dma_chan, &cbs, tx_channel), TAG, "register DMA callbacks failed");
+
+    size_t int_alignment = 0;
+    // get the alignment requirement from DMA
+    gdma_get_alignment_constraints(tx_channel->base.dma_chan, &int_alignment, NULL);
+    // apply RMT hardware alignment requirement
+    int_alignment = MAX(int_alignment, sizeof(rmt_symbol_word_t));
+    // the memory returned by `heap_caps_aligned_calloc` also meets the cache alignment requirement (both address and size)
+    rmt_symbol_word_t *dma_mem_base = heap_caps_aligned_calloc(int_alignment, sizeof(rmt_symbol_word_t), config->mem_block_symbols,
                                                                RMT_MEM_ALLOC_CAPS | MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     ESP_RETURN_ON_FALSE(dma_mem_base, ESP_ERR_NO_MEM, TAG, "no mem for tx DMA buffer");
     tx_channel->dma_mem_base = dma_mem_base;
+    uint32_t data_cache_line_size = cache_hal_get_cache_line_size(CACHE_LL_LEVEL_INT_MEM, CACHE_TYPE_DATA);
+    // do memory sync if the dma buffer is cached
+    if (data_cache_line_size) {
+        // write back and then invalidate the cache, because later RMT encoder accesses the dma_mem_base by non-cacheable address
+        ESP_RETURN_ON_ERROR(esp_cache_msync(dma_mem_base, sizeof(rmt_symbol_word_t) * config->mem_block_symbols,
+                                            ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED | ESP_CACHE_MSYNC_FLAG_INVALIDATE),
+                            TAG, "cache sync failed");
+    }
+    // For simplicity, encoder will use the non-cached address to read/write the DMA buffer
     tx_channel->dma_mem_base_nc = (rmt_symbol_word_t *)RMT_GET_NON_CACHE_ADDR(dma_mem_base);
+    // the DMA buffer size should be aligned to the DMA requirement
+    size_t mount_size_per_node = ALIGN_DOWN(config->mem_block_symbols * sizeof(rmt_symbol_word_t) / RMT_DMA_NODES_PING_PONG, int_alignment);
+    // check the upper and lower bound of mount_size_per_node
+    ESP_RETURN_ON_FALSE(mount_size_per_node >= sizeof(rmt_symbol_word_t), ESP_ERR_INVALID_ARG,
+                        TAG, "mem_block_symbols is too small");
+    ESP_RETURN_ON_FALSE(mount_size_per_node <= DMA_DESCRIPTOR_BUFFER_MAX_SIZE, ESP_ERR_INVALID_ARG,
+                        TAG, "mem_block_symbols can't exceed %zu", DMA_DESCRIPTOR_BUFFER_MAX_SIZE * RMT_DMA_NODES_PING_PONG / sizeof(rmt_symbol_word_t));
+
+    tx_channel->ping_pong_symbols = mount_size_per_node / sizeof(rmt_symbol_word_t);
     for (int i = 0; i < RMT_DMA_NODES_PING_PONG; i++) {
         // each descriptor shares half of the DMA buffer
         tx_channel->dma_nodes_nc[i].buffer = dma_mem_base + tx_channel->ping_pong_symbols * i;
@@ -69,19 +94,6 @@ static esp_err_t rmt_tx_init_dma_link(rmt_tx_channel_t *tx_channel, const rmt_tx
         tx_channel->dma_nodes_nc[i].dw0.suc_eof = 1;
     }
 
-    gdma_channel_alloc_config_t dma_chan_config = {
-        .direction = GDMA_CHANNEL_DIRECTION_TX,
-    };
-    ESP_RETURN_ON_ERROR(gdma_new_ahb_channel(&dma_chan_config, &tx_channel->base.dma_chan), TAG, "allocate TX DMA channel failed");
-    gdma_strategy_config_t gdma_strategy_conf = {
-        .auto_update_desc = true,
-        .owner_check = true,
-    };
-    gdma_apply_strategy(tx_channel->base.dma_chan, &gdma_strategy_conf);
-    gdma_tx_event_callbacks_t cbs = {
-        .on_trans_eof = rmt_dma_tx_eof_cb,
-    };
-    gdma_register_tx_event_callbacks(tx_channel->base.dma_chan, &cbs, tx_channel);
     return ESP_OK;
 }
 #endif // SOC_RMT_SUPPORT_DMA
@@ -98,7 +110,6 @@ static esp_err_t rmt_tx_register_to_group(rmt_tx_channel_t *tx_channel, const rm
         mem_block_num = 1;
         // Only the last channel has the DMA capability
         channel_scan_start = RMT_TX_CHANNEL_OFFSET_IN_GROUP + SOC_RMT_TX_CANDIDATES_PER_GROUP - 1;
-        tx_channel->ping_pong_symbols = config->mem_block_symbols / 2;
     } else {
         // one channel can occupy multiple memory blocks
         mem_block_num = config->mem_block_symbols / SOC_RMT_MEM_WORDS_PER_CHANNEL;
@@ -185,6 +196,10 @@ exit:
 
 static esp_err_t rmt_tx_destroy(rmt_tx_channel_t *tx_channel)
 {
+    if (tx_channel->base.gpio_num >= 0) {
+        gpio_output_disable(tx_channel->base.gpio_num);
+        esp_gpio_revoke(BIT64(tx_channel->base.gpio_num));
+    }
     if (tx_channel->base.intr) {
         ESP_RETURN_ON_ERROR(esp_intr_free(tx_channel->base.intr), TAG, "delete interrupt service failed");
     }
@@ -217,9 +232,6 @@ static esp_err_t rmt_tx_destroy(rmt_tx_channel_t *tx_channel)
 
 esp_err_t rmt_new_tx_channel(const rmt_tx_channel_config_t *config, rmt_channel_handle_t *ret_chan)
 {
-#if CONFIG_RMT_ENABLE_DEBUG_LOG
-    esp_log_level_set(TAG, ESP_LOG_DEBUG);
-#endif
     esp_err_t ret = ESP_OK;
     rmt_tx_channel_t *tx_channel = NULL;
     // Check if priority is valid
@@ -227,35 +239,46 @@ esp_err_t rmt_new_tx_channel(const rmt_tx_channel_config_t *config, rmt_channel_
         ESP_RETURN_ON_FALSE((config->intr_priority) > 0, ESP_ERR_INVALID_ARG, TAG, "invalid interrupt priority:%d", config->intr_priority);
         ESP_RETURN_ON_FALSE(1 << (config->intr_priority) & RMT_ALLOW_INTR_PRIORITY_MASK, ESP_ERR_INVALID_ARG, TAG, "invalid interrupt priority:%d", config->intr_priority);
     }
-    ESP_GOTO_ON_FALSE(config && ret_chan && config->resolution_hz && config->trans_queue_depth, ESP_ERR_INVALID_ARG, err, TAG, "invalid argument");
-    ESP_GOTO_ON_FALSE(GPIO_IS_VALID_GPIO(config->gpio_num), ESP_ERR_INVALID_ARG, err, TAG, "invalid GPIO number");
-    ESP_GOTO_ON_FALSE((config->mem_block_symbols & 0x01) == 0 && config->mem_block_symbols >= SOC_RMT_MEM_WORDS_PER_CHANNEL,
-                      ESP_ERR_INVALID_ARG, err, TAG, "mem_block_symbols must be even and at least %d", SOC_RMT_MEM_WORDS_PER_CHANNEL);
-
+    ESP_RETURN_ON_FALSE(config && ret_chan && config->resolution_hz && config->trans_queue_depth, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
+    ESP_RETURN_ON_FALSE(GPIO_IS_VALID_OUTPUT_GPIO(config->gpio_num), ESP_ERR_INVALID_ARG, TAG, "invalid GPIO number %d", config->gpio_num);
+    ESP_RETURN_ON_FALSE((config->mem_block_symbols & 0x01) == 0 && config->mem_block_symbols >= SOC_RMT_MEM_WORDS_PER_CHANNEL,
+                        ESP_ERR_INVALID_ARG, TAG, "mem_block_symbols must be even and at least %d", SOC_RMT_MEM_WORDS_PER_CHANNEL);
 #if SOC_RMT_SUPPORT_DMA
-    // we only support 2 nodes ping-pong, if the configured memory block size needs more than two DMA descriptors, should treat it as invalid
-    ESP_GOTO_ON_FALSE(config->mem_block_symbols <= RMT_DMA_DESC_BUF_MAX_SIZE * RMT_DMA_NODES_PING_PONG / sizeof(rmt_symbol_word_t),
-                      ESP_ERR_INVALID_ARG, err, TAG, "mem_block_symbols can't exceed %d",
-                      RMT_DMA_DESC_BUF_MAX_SIZE * RMT_DMA_NODES_PING_PONG / sizeof(rmt_symbol_word_t));
-#else
-    ESP_GOTO_ON_FALSE(config->flags.with_dma == 0, ESP_ERR_NOT_SUPPORTED, err, TAG, "DMA not supported");
+    if (config->flags.with_dma) {
+#if CONFIG_RMT_TX_ISR_CACHE_SAFE && (!CONFIG_GDMA_ISR_HANDLER_IN_IRAM || !CONFIG_GDMA_CTRL_FUNC_IN_IRAM)
+        ESP_RETURN_ON_FALSE(false, ESP_ERR_INVALID_STATE, TAG, "CONFIG_GDMA_ISR_HANDLER_IN_IRAM and CONFIG_GDMA_CTRL_FUNC_IN_IRAM must be enabled");
 #endif
+    }
+#else
+    ESP_RETURN_ON_FALSE(config->flags.with_dma == 0, ESP_ERR_NOT_SUPPORTED, TAG, "DMA not supported");
+#endif
+
+#if !SOC_RMT_SUPPORT_SLEEP_RETENTION
+    ESP_RETURN_ON_FALSE(config->flags.allow_pd == 0, ESP_ERR_NOT_SUPPORTED, TAG, "not able to power down in light sleep");
+#endif // SOC_RMT_SUPPORT_SLEEP_RETENTION
 
     // malloc channel memory
     uint32_t mem_caps = RMT_MEM_ALLOC_CAPS;
     tx_channel = heap_caps_calloc(1, sizeof(rmt_tx_channel_t) + sizeof(rmt_tx_trans_desc_t) * config->trans_queue_depth, mem_caps);
     ESP_GOTO_ON_FALSE(tx_channel, ESP_ERR_NO_MEM, err, TAG, "no mem for tx channel");
+    // GPIO configuration is not done yet
+    tx_channel->base.gpio_num = -1;
     // create DMA descriptors
     if (config->flags.with_dma) {
-        mem_caps |= MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA;
         // DMA descriptors must be placed in internal SRAM
+        mem_caps |= MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA;
+        rmt_dma_descriptor_t *dma_nodes = heap_caps_aligned_calloc(RMT_DMA_DESC_ALIGN, RMT_DMA_NODES_PING_PONG, sizeof(rmt_dma_descriptor_t), mem_caps);
+        ESP_GOTO_ON_FALSE(dma_nodes, ESP_ERR_NO_MEM, err, TAG, "no mem for tx DMA nodes");
+        tx_channel->dma_nodes = dma_nodes;
+        // write back and then invalidate the cached dma_nodes, because later the DMA nodes are accessed by non-cacheable address
         uint32_t data_cache_line_size = cache_hal_get_cache_line_size(CACHE_LL_LEVEL_INT_MEM, CACHE_TYPE_DATA);
-        // the alignment should meet both the DMA and cache requirement
-        size_t alignment = MAX(data_cache_line_size, RMT_DMA_DESC_ALIGN);
-        tx_channel->dma_nodes = heap_caps_aligned_calloc(alignment, RMT_DMA_NODES_PING_PONG, sizeof(rmt_dma_descriptor_t), mem_caps);
-        ESP_GOTO_ON_FALSE(tx_channel->dma_nodes, ESP_ERR_NO_MEM, err, TAG, "no mem for tx DMA nodes");
+        if (data_cache_line_size) {
+            ESP_GOTO_ON_ERROR(esp_cache_msync(dma_nodes, RMT_DMA_NODES_PING_PONG * sizeof(rmt_dma_descriptor_t),
+                                              ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE | ESP_CACHE_MSYNC_FLAG_UNALIGNED),
+                              err, TAG, "cache sync failed");
+        }
         // we will use the non-cached address to manipulate the DMA descriptor, for simplicity
-        tx_channel->dma_nodes_nc = (rmt_dma_descriptor_t *)RMT_GET_NON_CACHE_ADDR(tx_channel->dma_nodes);
+        tx_channel->dma_nodes_nc = (rmt_dma_descriptor_t *)RMT_GET_NON_CACHE_ADDR(dma_nodes);
     }
     // create transaction queues
     ESP_GOTO_ON_ERROR(rmt_tx_create_trans_queue(tx_channel, config), err, TAG, "install trans queues failed");
@@ -265,6 +288,12 @@ esp_err_t rmt_new_tx_channel(const rmt_tx_channel_config_t *config, rmt_channel_
     rmt_hal_context_t *hal = &group->hal;
     int channel_id = tx_channel->base.channel_id;
     int group_id = group->group_id;
+
+#if RMT_USE_RETENTION_LINK
+    if (config->flags.allow_pd != 0) {
+        rmt_create_retention_module(group);
+    }
+#endif // RMT_USE_RETENTION_LINK
 
     // reset channel, make sure the TX engine is not working, and events are cleared
     portENTER_CRITICAL(&group->spinlock);
@@ -277,7 +306,7 @@ esp_err_t rmt_new_tx_channel(const rmt_tx_channel_config_t *config, rmt_channel_
     bool priority_conflict = rmt_set_intr_priority_to_group(group, config->intr_priority);
     ESP_GOTO_ON_FALSE(!priority_conflict, ESP_ERR_INVALID_ARG, err, TAG, "intr_priority conflict");
     // 2-- Get interrupt allocation flag
-    int isr_flags = rmt_get_isr_flags(group);
+    int isr_flags = rmt_isr_priority_to_flags(group) | RMT_TX_INTR_ALLOC_FLAG;
     // 3-- Allocate interrupt using isr_flag
     ret = esp_intr_alloc_intrstatus(rmt_periph_signals.groups[group_id].irq, isr_flags,
                                     (uint32_t) rmt_ll_get_interrupt_status_reg(hal->regs),
@@ -290,46 +319,44 @@ esp_err_t rmt_new_tx_channel(const rmt_tx_channel_config_t *config, rmt_channel_
         ESP_GOTO_ON_ERROR(rmt_tx_init_dma_link(tx_channel, config), err, TAG, "install tx DMA failed");
     }
 #endif
-    // select the clock source
-    ESP_GOTO_ON_ERROR(rmt_select_periph_clock(&tx_channel->base, config->clk_src), err, TAG, "set group clock failed");
-    // set channel clock resolution
-    uint32_t real_div = group->resolution_hz / config->resolution_hz;
-    rmt_ll_tx_set_channel_clock_div(hal->regs, channel_id, real_div);
-    // resolution lost due to division, calculate the real resolution
-    tx_channel->base.resolution_hz = group->resolution_hz / real_div;
-    if (tx_channel->base.resolution_hz != config->resolution_hz) {
-        ESP_LOGW(TAG, "channel resolution loss, real=%"PRIu32, tx_channel->base.resolution_hz);
-    }
+    tx_channel->base.direction = RMT_CHANNEL_DIRECTION_TX;
+    // select the clock source and set clock resolution
+    ESP_GOTO_ON_ERROR(rmt_select_periph_clock(&tx_channel->base, config->clk_src, config->resolution_hz), err, TAG, "set clock resolution failed");
 
     rmt_ll_tx_set_mem_blocks(hal->regs, channel_id, tx_channel->base.mem_block_num);
     // set limit threshold, after transmit ping_pong_symbols size, an interrupt event would be generated
     rmt_ll_tx_set_limit(hal->regs, channel_id, tx_channel->ping_pong_symbols);
-    // disable carrier modulation by default, can reenable by `rmt_apply_carrier()`
+    // disable carrier modulation by default, can re-enable by `rmt_apply_carrier()`
     rmt_ll_tx_enable_carrier_modulation(hal->regs, channel_id, false);
     // idle level is determined by register value
     rmt_ll_tx_fix_idle_level(hal->regs, channel_id, 0, true);
     // always enable tx wrap, both DMA mode and ping-pong mode rely this feature
     rmt_ll_tx_enable_wrap(hal->regs, channel_id, true);
 
+    // reserve the GPIO output path, because we don't expect another peripheral to signal to the same GPIO
+    uint64_t old_gpio_rsv_mask = esp_gpio_reserve(BIT64(config->gpio_num));
+    // check if the GPIO is already used by others, RMT TX channel only uses the output path of the GPIO
+    if (old_gpio_rsv_mask & BIT64(config->gpio_num)) {
+        ESP_LOGW(TAG, "GPIO %d is not usable, maybe conflict with others", config->gpio_num);
+    }
     // GPIO Matrix/MUX configuration
-    tx_channel->base.gpio_num = config->gpio_num;
-    gpio_config_t gpio_conf = {
-        .intr_type = GPIO_INTR_DISABLE,
-        // also enable the input path if `io_loop_back` is on, this is useful for bi-directional buses
-        .mode = (config->flags.io_od_mode ? GPIO_MODE_OUTPUT_OD : GPIO_MODE_OUTPUT) | (config->flags.io_loop_back ? GPIO_MODE_INPUT : 0),
-        .pull_down_en = false,
-        .pull_up_en = true,
-        .pin_bit_mask = 1ULL << config->gpio_num,
-    };
-    ESP_GOTO_ON_ERROR(gpio_config(&gpio_conf), err, TAG, "config GPIO failed");
+    gpio_func_sel(config->gpio_num, PIN_FUNC_GPIO);
+    // connect the signal to the GPIO by matrix, it will also enable the output path properly
     esp_rom_gpio_connect_out_signal(config->gpio_num,
                                     rmt_periph_signals.groups[group_id].channels[channel_id + RMT_TX_CHANNEL_OFFSET_IN_GROUP].tx_sig,
                                     config->flags.invert_out, false);
-    gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[config->gpio_num], PIN_FUNC_GPIO);
+    tx_channel->base.gpio_num = config->gpio_num;
+
+    // deprecated, to be removed in in esp-idf v6.0
+    if (config->flags.io_loop_back) {
+        gpio_ll_input_enable(&GPIO, config->gpio_num);
+    }
+    if (config->flags.io_od_mode) {
+        gpio_ll_od_enable(&GPIO, config->gpio_num);
+    }
 
     portMUX_INITIALIZE(&tx_channel->base.spinlock);
     atomic_init(&tx_channel->base.fsm, RMT_FSM_INIT);
-    tx_channel->base.direction = RMT_CHANNEL_DIRECTION_TX;
     tx_channel->base.hw_mem_base = &RMTMEM.channels[channel_id + RMT_TX_CHANNEL_OFFSET_IN_GROUP].symbols[0];
     // polymorphic methods
     tx_channel->base.del = rmt_del_tx_channel;
@@ -481,7 +508,7 @@ esp_err_t rmt_tx_register_event_callbacks(rmt_channel_handle_t channel, const rm
     ESP_RETURN_ON_FALSE(channel->direction == RMT_CHANNEL_DIRECTION_TX, ESP_ERR_INVALID_ARG, TAG, "invalid channel direction");
     rmt_tx_channel_t *tx_chan = __containerof(channel, rmt_tx_channel_t, base);
 
-#if CONFIG_RMT_ISR_IRAM_SAFE
+#if CONFIG_RMT_TX_ISR_CACHE_SAFE
     if (cbs->on_trans_done) {
         ESP_RETURN_ON_FALSE(esp_ptr_in_iram(cbs->on_trans_done), ESP_ERR_INVALID_ARG, TAG, "on_trans_done callback not in IRAM");
     }
@@ -502,7 +529,7 @@ esp_err_t rmt_transmit(rmt_channel_handle_t channel, rmt_encoder_t *encoder, con
 #if !SOC_RMT_SUPPORT_TX_LOOP_COUNT
     ESP_RETURN_ON_FALSE(config->loop_count <= 0, ESP_ERR_NOT_SUPPORTED, TAG, "loop count is not supported");
 #endif // !SOC_RMT_SUPPORT_TX_LOOP_COUNT
-#if CONFIG_RMT_ISR_IRAM_SAFE
+#if CONFIG_RMT_TX_ISR_CACHE_SAFE
     // payload is retrieved by the encoder, we should make sure it's still accessible even when the cache is disabled
     ESP_RETURN_ON_FALSE(esp_ptr_internal(payload), ESP_ERR_INVALID_ARG, TAG, "payload not in internal RAM");
 #endif
@@ -540,7 +567,7 @@ esp_err_t rmt_transmit(rmt_channel_handle_t channel, rmt_encoder_t *encoder, con
 
     // check if we need to start one pending transaction
     rmt_fsm_t expected_fsm = RMT_FSM_ENABLE;
-    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_RUN_WAIT)) {
+    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_WAIT)) {
         // check if we need to start one transaction
         if (xQueueReceive(tx_chan->trans_queues[RMT_TX_QUEUE_PROGRESS], &t, 0) == pdTRUE) {
             atomic_store(&channel->fsm, RMT_FSM_RUN);
@@ -571,39 +598,43 @@ esp_err_t rmt_tx_wait_all_done(rmt_channel_handle_t channel, int timeout_ms)
     return ESP_OK;
 }
 
-static void IRAM_ATTR rmt_tx_mark_eof(rmt_tx_channel_t *tx_chan)
+static size_t rmt_tx_mark_eof(rmt_tx_channel_t *tx_chan, bool need_eof_marker)
 {
     rmt_channel_t *channel = &tx_chan->base;
     rmt_group_t *group = channel->group;
     int channel_id = channel->channel_id;
-    rmt_symbol_word_t *mem_to_nc = NULL;
     rmt_tx_trans_desc_t *cur_trans = tx_chan->cur_trans;
     rmt_dma_descriptor_t *desc_nc = NULL;
-    if (channel->dma_chan) {
-        mem_to_nc = tx_chan->dma_mem_base_nc;
-    } else {
-        mem_to_nc = channel->hw_mem_base;
-    }
 
-    // a RMT word whose duration is zero means a "stop" pattern
-    mem_to_nc[tx_chan->mem_off++] = (rmt_symbol_word_t) {
-        .duration0 = 0,
-        .level0 = cur_trans->flags.eot_level,
-        .duration1 = 0,
-        .level1 = cur_trans->flags.eot_level,
-    };
+    if (need_eof_marker) {
+        rmt_symbol_word_t *mem_to_nc = NULL;
+        if (channel->dma_chan) {
+            mem_to_nc = tx_chan->dma_mem_base_nc;
+        } else {
+            mem_to_nc = channel->hw_mem_base;
+        }
+        size_t symbol_off = tx_chan->mem_off_bytes / sizeof(rmt_symbol_word_t);
+        // a RMT word whose duration is zero means a "stop" pattern
+        mem_to_nc[symbol_off] = (rmt_symbol_word_t) {
+            .duration0 = 0,
+            .level0 = cur_trans->flags.eot_level,
+            .duration1 = 0,
+            .level1 = cur_trans->flags.eot_level,
+        };
+        tx_chan->mem_off_bytes += sizeof(rmt_symbol_word_t);
+    }
 
     size_t off = 0;
     if (channel->dma_chan) {
-        if (tx_chan->mem_off <= tx_chan->ping_pong_symbols) {
+        if (tx_chan->mem_off_bytes <= tx_chan->ping_pong_symbols * sizeof(rmt_symbol_word_t)) {
             desc_nc = &tx_chan->dma_nodes_nc[0];
-            off = tx_chan->mem_off;
+            off = tx_chan->mem_off_bytes;
         } else {
             desc_nc = &tx_chan->dma_nodes_nc[1];
-            off = tx_chan->mem_off - tx_chan->ping_pong_symbols;
+            off = tx_chan->mem_off_bytes - tx_chan->ping_pong_symbols * sizeof(rmt_symbol_word_t);
         }
         desc_nc->dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
-        desc_nc->dw0.length = off * sizeof(rmt_symbol_word_t);
+        desc_nc->dw0.length = off;
         // break down the DMA descriptor link
         desc_nc->next = NULL;
     } else {
@@ -612,21 +643,24 @@ static void IRAM_ATTR rmt_tx_mark_eof(rmt_tx_channel_t *tx_chan)
         rmt_ll_enable_interrupt(group->hal.regs, RMT_LL_EVENT_TX_THRES(channel_id), false);
         portEXIT_CRITICAL_ISR(&group->spinlock);
     }
+
+    return need_eof_marker ? 1 : 0;
 }
 
-static size_t IRAM_ATTR rmt_encode_check_result(rmt_tx_channel_t *tx_chan, rmt_tx_trans_desc_t *t)
+size_t rmt_encode_check_result(rmt_tx_channel_t *tx_chan, rmt_tx_trans_desc_t *t)
 {
     rmt_encode_state_t encode_state = RMT_ENCODING_RESET;
     rmt_encoder_handle_t encoder = t->encoder;
     size_t encoded_symbols = encoder->encode(encoder, &tx_chan->base, t->payload, t->payload_bytes, &encode_state);
 
     if (encode_state & RMT_ENCODING_COMPLETE) {
-        t->flags.encoding_done = true;
+        bool need_eof_mark = (encode_state & RMT_ENCODING_WITH_EOF) == 0;
         // inserting EOF symbol if there's extra space
         if (!(encode_state & RMT_ENCODING_MEM_FULL)) {
-            rmt_tx_mark_eof(tx_chan);
-            encoded_symbols += 1;
+            encoded_symbols += rmt_tx_mark_eof(tx_chan, need_eof_mark);
         }
+        t->flags.encoding_done = true;
+        t->flags.need_eof_mark = need_eof_mark;
     }
 
     // for loop transaction, the memory block should accommodate all encoded RMT symbols
@@ -639,7 +673,7 @@ static size_t IRAM_ATTR rmt_encode_check_result(rmt_tx_channel_t *tx_chan, rmt_t
     return encoded_symbols;
 }
 
-static void IRAM_ATTR rmt_tx_do_transaction(rmt_tx_channel_t *tx_chan, rmt_tx_trans_desc_t *t)
+static void rmt_tx_do_transaction(rmt_tx_channel_t *tx_chan, rmt_tx_trans_desc_t *t)
 {
     rmt_channel_t *channel = &tx_chan->base;
     rmt_group_t *group = channel->group;
@@ -648,6 +682,9 @@ static void IRAM_ATTR rmt_tx_do_transaction(rmt_tx_channel_t *tx_chan, rmt_tx_tr
 
     // update current transaction
     tx_chan->cur_trans = t;
+
+    // reset RMT encoder before starting a new transaction
+    rmt_encoder_reset(t->encoder);
 
 #if SOC_RMT_SUPPORT_DMA
     if (channel->dma_chan) {
@@ -699,7 +736,7 @@ static void IRAM_ATTR rmt_tx_do_transaction(rmt_tx_channel_t *tx_chan, rmt_tx_tr
 
     // at the beginning of a new transaction, encoding memory offset should start from zero.
     // It will increase in the encode function e.g. `rmt_encode_copy()`
-    tx_chan->mem_off = 0;
+    tx_chan->mem_off_bytes = 0;
     // use the full memory block for the beginning encoding session
     tx_chan->mem_end = tx_chan->ping_pong_symbols * 2;
     // perform the encoding session, return the number of encoded symbols
@@ -725,7 +762,7 @@ static esp_err_t rmt_tx_enable(rmt_channel_handle_t channel)
 {
     // can enable the channel when it's in "init" state
     rmt_fsm_t expected_fsm = RMT_FSM_INIT;
-    ESP_RETURN_ON_FALSE(atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_ENABLE_WAIT),
+    ESP_RETURN_ON_FALSE(atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_WAIT),
                         ESP_ERR_INVALID_STATE, TAG, "channel not in init state");
     rmt_tx_channel_t *tx_chan = __containerof(channel, rmt_tx_channel_t, base);
 
@@ -753,7 +790,7 @@ static esp_err_t rmt_tx_enable(rmt_channel_handle_t channel)
     // check if we need to start one pending transaction
     rmt_tx_trans_desc_t *t = NULL;
     expected_fsm = RMT_FSM_ENABLE;
-    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_RUN_WAIT)) {
+    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_WAIT)) {
         if (xQueueReceive(tx_chan->trans_queues[RMT_TX_QUEUE_PROGRESS], &t, 0) == pdTRUE) {
             // sanity check
             assert(t);
@@ -777,11 +814,11 @@ static esp_err_t rmt_tx_disable(rmt_channel_handle_t channel)
     // can disable the channel when it's in `enable` or `run` state
     bool valid_state = false;
     rmt_fsm_t expected_fsm = RMT_FSM_ENABLE;
-    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_INIT_WAIT)) {
+    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_WAIT)) {
         valid_state = true;
     }
     expected_fsm = RMT_FSM_RUN;
-    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_INIT_WAIT)) {
+    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_WAIT)) {
         valid_state = true;
         // disable the hardware
         portENTER_CRITICAL(&channel->spinlock);
@@ -820,8 +857,6 @@ static esp_err_t rmt_tx_disable(rmt_channel_handle_t channel)
     // recycle the interrupted transaction
     if (tx_chan->cur_trans) {
         xQueueSend(tx_chan->trans_queues[RMT_TX_QUEUE_COMPLETE], &tx_chan->cur_trans, 0);
-        // reset corresponding encoder
-        rmt_encoder_reset(tx_chan->cur_trans->encoder);
     }
     tx_chan->cur_trans = NULL;
 
@@ -874,15 +909,14 @@ static esp_err_t rmt_tx_modulate_carrier(rmt_channel_handle_t channel, const rmt
     return ESP_OK;
 }
 
-static bool IRAM_ATTR rmt_isr_handle_tx_threshold(rmt_tx_channel_t *tx_chan)
+bool rmt_isr_handle_tx_threshold(rmt_tx_channel_t *tx_chan)
 {
     // continue ping-pong transmission
     rmt_tx_trans_desc_t *t = tx_chan->cur_trans;
     size_t encoded_symbols = t->transmitted_symbol_num;
     // encoding finished, only need to send the EOF symbol
     if (t->flags.encoding_done) {
-        rmt_tx_mark_eof(tx_chan);
-        encoded_symbols += 1;
+        encoded_symbols += rmt_tx_mark_eof(tx_chan, t->flags.need_eof_mark);
     } else {
         encoded_symbols += rmt_encode_check_result(tx_chan, t);
     }
@@ -892,7 +926,7 @@ static bool IRAM_ATTR rmt_isr_handle_tx_threshold(rmt_tx_channel_t *tx_chan)
     return false;
 }
 
-static bool IRAM_ATTR rmt_isr_handle_tx_done(rmt_tx_channel_t *tx_chan)
+bool rmt_isr_handle_tx_done(rmt_tx_channel_t *tx_chan)
 {
     rmt_channel_t *channel = &tx_chan->base;
     BaseType_t awoken = pdFALSE;
@@ -900,7 +934,7 @@ static bool IRAM_ATTR rmt_isr_handle_tx_done(rmt_tx_channel_t *tx_chan)
     bool need_yield = false;
 
     rmt_fsm_t expected_fsm = RMT_FSM_RUN;
-    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_ENABLE_WAIT)) {
+    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_WAIT)) {
         trans_desc = tx_chan->cur_trans;
         // move current finished transaction to the complete queue
         xQueueSendFromISR(tx_chan->trans_queues[RMT_TX_QUEUE_COMPLETE], &trans_desc, &awoken);
@@ -924,7 +958,7 @@ static bool IRAM_ATTR rmt_isr_handle_tx_done(rmt_tx_channel_t *tx_chan)
 
     // let's try start the next pending transaction
     expected_fsm = RMT_FSM_ENABLE;
-    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_RUN_WAIT)) {
+    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_WAIT)) {
         if (xQueueReceiveFromISR(tx_chan->trans_queues[RMT_TX_QUEUE_PROGRESS], &trans_desc, &awoken) == pdTRUE) {
             // sanity check
             assert(trans_desc);
@@ -943,7 +977,7 @@ static bool IRAM_ATTR rmt_isr_handle_tx_done(rmt_tx_channel_t *tx_chan)
 }
 
 #if SOC_RMT_SUPPORT_TX_LOOP_COUNT
-static bool IRAM_ATTR rmt_isr_handle_tx_loop_end(rmt_tx_channel_t *tx_chan)
+bool rmt_isr_handle_tx_loop_end(rmt_tx_channel_t *tx_chan)
 {
     rmt_channel_t *channel = &tx_chan->base;
     rmt_group_t *group = channel->group;
@@ -978,7 +1012,7 @@ static bool IRAM_ATTR rmt_isr_handle_tx_loop_end(rmt_tx_channel_t *tx_chan)
 
         // loop transaction finished
         rmt_fsm_t expected_fsm = RMT_FSM_RUN;
-        if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_ENABLE_WAIT)) {
+        if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_WAIT)) {
             // move current finished transaction to the complete queue
             xQueueSendFromISR(tx_chan->trans_queues[RMT_TX_QUEUE_COMPLETE], &trans_desc, &awoken);
             if (awoken == pdTRUE) {
@@ -1001,7 +1035,7 @@ static bool IRAM_ATTR rmt_isr_handle_tx_loop_end(rmt_tx_channel_t *tx_chan)
 
         // let's try start the next pending transaction
         expected_fsm = RMT_FSM_ENABLE;
-        if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_RUN_WAIT)) {
+        if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_WAIT)) {
             if (xQueueReceiveFromISR(tx_chan->trans_queues[RMT_TX_QUEUE_PROGRESS], &trans_desc, &awoken) == pdTRUE) {
                 // sanity check
                 assert(trans_desc);
@@ -1024,7 +1058,7 @@ static bool IRAM_ATTR rmt_isr_handle_tx_loop_end(rmt_tx_channel_t *tx_chan)
 }
 #endif // SOC_RMT_SUPPORT_TX_LOOP_COUNT
 
-static void IRAM_ATTR rmt_tx_default_isr(void *args)
+static void rmt_tx_default_isr(void *args)
 {
     rmt_tx_channel_t *tx_chan = (rmt_tx_channel_t *)args;
     rmt_channel_t *channel = &tx_chan->base;
@@ -1065,30 +1099,74 @@ static void IRAM_ATTR rmt_tx_default_isr(void *args)
 }
 
 #if SOC_RMT_SUPPORT_DMA
-static bool IRAM_ATTR rmt_dma_tx_eof_cb(gdma_channel_handle_t dma_chan, gdma_event_data_t *event_data, void *user_data)
+static bool rmt_dma_tx_eof_cb(gdma_channel_handle_t dma_chan, gdma_event_data_t *event_data, void *user_data)
 {
     rmt_tx_channel_t *tx_chan = (rmt_tx_channel_t *)user_data;
+    // tx_eof_desc_addr must be non-zero, guaranteed by the hardware
     rmt_dma_descriptor_t *eof_desc_nc = (rmt_dma_descriptor_t *)RMT_GET_NON_CACHE_ADDR(event_data->tx_eof_desc_addr);
-    rmt_dma_descriptor_t *n = (rmt_dma_descriptor_t *)RMT_GET_NON_CACHE_ADDR(eof_desc_nc->next); // next points to a cache address, needs to convert it to a non-cached one
-    if (n) {
-        rmt_dma_descriptor_t *nn = (rmt_dma_descriptor_t *)RMT_GET_NON_CACHE_ADDR(n->next);
-        // if the DMA descriptor link is still a ring (i.e. hasn't broken down by `rmt_tx_mark_eof()`), then we treat it as a valid ping-pong event
-        if (nn) {
-            // continue ping-pong transmission
-            rmt_tx_trans_desc_t *t = tx_chan->cur_trans;
-            size_t encoded_symbols = t->transmitted_symbol_num;
-            if (t->flags.encoding_done) {
-                rmt_tx_mark_eof(tx_chan);
-                encoded_symbols += 1;
-            } else {
-                encoded_symbols += rmt_encode_check_result(tx_chan, t);
-            }
-            t->transmitted_symbol_num = encoded_symbols;
-            tx_chan->mem_end = tx_chan->ping_pong_symbols * 3 - tx_chan->mem_end; // mem_end equals to either ping_pong_symbols or ping_pong_symbols*2
-            // tell DMA that we have a new descriptor attached
-            gdma_append(dma_chan);
-        }
+    if (!eof_desc_nc->next) {
+        return false;
     }
+    // next points to a cache address, convert it to a non-cached one
+    rmt_dma_descriptor_t *n = (rmt_dma_descriptor_t *)RMT_GET_NON_CACHE_ADDR(eof_desc_nc->next);
+    if (!n->next) {
+        return false;
+    }
+    // if the DMA descriptor link is still a ring (i.e. hasn't broken down by `rmt_tx_mark_eof()`), then we treat it as a valid ping-pong event
+    // continue ping-pong transmission
+    rmt_tx_trans_desc_t *t = tx_chan->cur_trans;
+    size_t encoded_symbols = t->transmitted_symbol_num;
+    if (t->flags.encoding_done) {
+        encoded_symbols += rmt_tx_mark_eof(tx_chan, t->flags.need_eof_mark);
+    } else {
+        encoded_symbols += rmt_encode_check_result(tx_chan, t);
+    }
+    t->transmitted_symbol_num = encoded_symbols;
+    tx_chan->mem_end = tx_chan->ping_pong_symbols * 3 - tx_chan->mem_end; // mem_end equals to either ping_pong_symbols or ping_pong_symbols*2
+    // tell DMA that we have a new descriptor attached
+    gdma_append(dma_chan);
     return false;
 }
 #endif // SOC_RMT_SUPPORT_DMA
+
+esp_err_t rmt_tx_switch_gpio(rmt_channel_handle_t channel, gpio_num_t gpio_num, bool invert_out)
+{
+    ESP_RETURN_ON_FALSE(channel && channel->direction == RMT_CHANNEL_DIRECTION_TX, ESP_ERR_INVALID_ARG, TAG, "invalid channel");
+    ESP_RETURN_ON_FALSE(GPIO_IS_VALID_OUTPUT_GPIO(gpio_num), ESP_ERR_INVALID_ARG, TAG, "invalid GPIO number %d", gpio_num);
+
+    // only can switch the GPIO when it's in INIT state
+    rmt_fsm_t expected_fsm = RMT_FSM_INIT;
+    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_WAIT)) {
+
+        rmt_tx_channel_t *tx_chan = __containerof(channel, rmt_tx_channel_t, base);
+        rmt_group_t *group = channel->group;
+        int group_id = group->group_id;
+        int channel_id = channel->channel_id;
+
+        // Disable the old GPIO
+        if (tx_chan->base.gpio_num >= 0) {
+            gpio_output_disable(tx_chan->base.gpio_num);
+            esp_gpio_revoke(BIT64(tx_chan->base.gpio_num));
+        }
+
+        // Reserve the new GPIO
+        uint64_t old_gpio_rsv_mask = esp_gpio_reserve(BIT64(gpio_num));
+        if (old_gpio_rsv_mask & BIT64(gpio_num)) {
+            ESP_LOGW(TAG, "GPIO %d is not usable, maybe conflict with others", gpio_num);
+        }
+
+        // Configure the new GPIO
+        gpio_func_sel(gpio_num, PIN_FUNC_GPIO);
+        esp_rom_gpio_connect_out_signal(gpio_num,
+                                        rmt_periph_signals.groups[group_id].channels[channel_id + RMT_TX_CHANNEL_OFFSET_IN_GROUP].tx_sig,
+                                        invert_out, false);
+        tx_chan->base.gpio_num = gpio_num;
+
+        // finally we return to the INIT state
+        atomic_store(&channel->fsm, RMT_FSM_INIT);
+        ESP_LOGD(TAG, "switch tx channel(%d,%d) gpio to %d", group_id, channel_id, gpio_num);
+    } else {
+        ESP_RETURN_ON_FALSE(false, ESP_ERR_INVALID_STATE, TAG, "channel is not in init state");
+    }
+    return ESP_OK;
+}

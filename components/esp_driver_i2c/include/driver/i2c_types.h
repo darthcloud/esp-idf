@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include "hal/i2c_types.h"
 #include "soc/soc_caps.h"
+#include "sdkconfig.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,11 +35,38 @@ typedef enum {
     I2C_STATUS_TIMEOUT,   /*!< I2C bus status error, and operation timeout */
 } i2c_master_status_t;
 
+/**
+ * @brief Enumeration for I2C event.
+ */
 typedef enum {
     I2C_EVENT_ALIVE,      /*!< i2c bus in alive status.*/
     I2C_EVENT_DONE,       /*!< i2c bus transaction done */
     I2C_EVENT_NACK,       /*!< i2c bus nack */
+    I2C_EVENT_TIMEOUT,    /*!< i2c bus timeout */
 } i2c_master_event_t;
+
+/**
+ * @brief Enum for I2C master commands
+ *
+ * These commands are used to define the I2C master operations.
+ * They correspond to hardware-level commands supported by the I2C peripheral.
+ */
+typedef enum {
+    I2C_MASTER_CMD_START,    /**< Start or Restart condition */
+    I2C_MASTER_CMD_WRITE,    /**< Write operation */
+    I2C_MASTER_CMD_READ,     /**< Read operation */
+    I2C_MASTER_CMD_STOP,     /**< Stop condition */
+} i2c_master_command_t;
+
+/**
+ * @brief Enum for I2C master ACK values
+ *
+ * These values define the acknowledgment (ACK) behavior during read operations.
+ */
+typedef enum {
+    I2C_ACK_VAL = 0,  /**< Acknowledge (ACK) signal */
+    I2C_NACK_VAL = 1, /**< Not Acknowledge (NACK) signal */
+}  __attribute__((packed)) i2c_ack_value_t;
 
 /**
  * @brief Type of I2C master bus handle
@@ -78,6 +106,9 @@ typedef bool (*i2c_master_callback_t)(i2c_master_dev_handle_t i2c_dev, const i2c
  */
 typedef struct {
     uint8_t *buffer;  /**< Pointer for buffer received in callback. */
+#if CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2
+    uint32_t length;      /**< Length for buffer received in callback. */
+#endif
 } i2c_slave_rx_done_event_data_t;
 
 /**
@@ -105,13 +136,32 @@ typedef struct {
  *
  * @param[in]  i2c_slave Handle for I2C slave.
  * @param[out] evt_cause I2C capture event cause, fed by driver
- * @param[in]  user_ctx User data, set in `i2c_slave_register_event_callbacks()`
+ * @param[in]  arg User data, set in `i2c_slave_register_event_callbacks()`
  *
  * @return Whether a high priority task has been waken up by this function
  */
 typedef bool (*i2c_slave_stretch_callback_t)(i2c_slave_dev_handle_t i2c_slave, const i2c_slave_stretch_event_data_t *evt_cause, void *arg);
 
 #endif
+
+/**
+ * @brief Event structure used in I2C slave request.
+ */
+typedef struct {
+
+} i2c_slave_request_event_data_t;
+
+/**
+ * @brief Callback signature for I2C slave request event. When this callback is triggered that means master want to read data
+ * from slave while there is no data in slave fifo. So user should write data to fifo via `i2c_slave_write`
+ *
+ * @param[in]  i2c_slave Handle for I2C slave.
+ * @param[out] evt_data I2C receive event data, fed by driver
+ * @param[in]  arg User data, set in `i2c_slave_register_event_callbacks()`
+ *
+ * @return Whether a high priority task has been waken up by this function
+ */
+typedef bool (*i2c_slave_request_callback_t)(i2c_slave_dev_handle_t i2c_slave, const i2c_slave_request_event_data_t *evt_data, void *arg);
 
 #ifdef __cplusplus
 }

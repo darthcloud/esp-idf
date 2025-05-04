@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -15,6 +15,7 @@
 #include "hal/gpio_hal.h"
 #include "soc/pcnt_periph.h"
 #include "esp_rom_gpio.h"
+#include "esp_private/gpio.h"
 
 #define PCNT_CHANNEL_ERR_STR  "PCNT CHANNEL ERROR"
 #define PCNT_UNIT_ERR_STR  "PCNT UNIT ERROR"
@@ -36,7 +37,6 @@
 #else
 #define PCNT_RCC_ATOMIC()
 #endif
-
 
 static const char *TAG = "pcnt(legacy)";
 
@@ -87,14 +87,14 @@ static inline esp_err_t _pcnt_set_pin(pcnt_port_t pcnt_port, pcnt_unit_t unit, p
     PCNT_CHECK(GPIO_IS_VALID_GPIO(ctrl_io) || ctrl_io < 0, PCNT_GPIO_ERR_STR, ESP_ERR_INVALID_ARG);
 
     if (pulse_io >= 0) {
-        gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[pulse_io], PIN_FUNC_GPIO);
+        gpio_func_sel(pulse_io, PIN_FUNC_GPIO);
         gpio_set_direction(pulse_io, GPIO_MODE_INPUT);
         gpio_set_pull_mode(pulse_io, GPIO_PULLUP_ONLY);
         esp_rom_gpio_connect_in_signal(pulse_io, pcnt_periph_signals.groups[pcnt_port].units[unit].channels[channel].pulse_sig, 0);
     }
 
     if (ctrl_io >= 0) {
-        gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[ctrl_io], PIN_FUNC_GPIO);
+        gpio_func_sel(ctrl_io, PIN_FUNC_GPIO);
         gpio_set_direction(ctrl_io, GPIO_MODE_INPUT);
         gpio_set_pull_mode(ctrl_io, GPIO_PULLUP_ONLY);
         esp_rom_gpio_connect_in_signal(ctrl_io, pcnt_periph_signals.groups[pcnt_port].units[unit].channels[channel].control_sig, 0);
@@ -369,7 +369,7 @@ static inline esp_err_t _pcnt_unit_config(pcnt_port_t pcnt_port, const pcnt_conf
     PCNT_CHECK(ctrl_io < 0 || GPIO_IS_VALID_GPIO(ctrl_io), "PCNT ctrl io error", ESP_ERR_INVALID_ARG);
     PCNT_CHECK((pcnt_config->pos_mode < PCNT_COUNT_MAX) && (pcnt_config->neg_mode < PCNT_COUNT_MAX), PCNT_COUNT_MODE_ERR_STR, ESP_ERR_INVALID_ARG);
     PCNT_CHECK((pcnt_config->hctrl_mode < PCNT_MODE_MAX) && (pcnt_config->lctrl_mode < PCNT_MODE_MAX), PCNT_CTRL_MODE_ERR_STR, ESP_ERR_INVALID_ARG);
-    /*Enalbe hardware module*/
+    /*Enable hardware module*/
     static bool pcnt_enable = false;
     if (pcnt_enable == false) {
         PCNT_RCC_ATOMIC() {
@@ -555,6 +555,7 @@ void pcnt_isr_service_uninstall(void)
     _pcnt_isr_service_uninstall(PCNT_PORT_0);
 }
 
+#if !CONFIG_PCNT_SKIP_LEGACY_CONFLICT_CHECK
 /**
  * @brief This function will be called during start up, to check that pulse_cnt driver is not running along with the legacy pcnt driver
  */
@@ -570,3 +571,4 @@ static void check_pcnt_driver_conflict(void)
     }
     ESP_EARLY_LOGW(TAG, "legacy driver is deprecated, please migrate to `driver/pulse_cnt.h`");
 }
+#endif //CONFIG_PCNT_SKIP_LEGACY_CONFLICT_CHECK

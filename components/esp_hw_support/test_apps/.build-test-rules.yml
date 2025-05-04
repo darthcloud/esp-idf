@@ -14,35 +14,13 @@ components/esp_hw_support/test_apps/dma2d:
   depends_filepatterns:
     - components/esp_hw_support/dma/**/*
 
-components/esp_hw_support/test_apps/esp_hw_support_unity_tests:
-  disable:
-    - if: SOC_GPSPI_SUPPORTED != 1
-  disable_test:
-    - if: IDF_TARGET == "esp32p4"
-      temporary: true
-      reason: test not pass, should be re-enable # TODO: IDF-8972
-
-components/esp_hw_support/test_apps/etm:
-  disable:
-    - if: SOC_ETM_SUPPORTED != 1
-  disable_test:
-    - if: IDF_TARGET == "esp32p4"
-      temporary: true
-      reason: test not pass, should be re-enable # TODO: IDF-8974
-  depends_components:
-    - esp_driver_gptimer
-    - esp_driver_gpio
-    - esp_driver_mcpwm
-    - esp_timer
-    - esp_driver_ana_cmpr
-
 components/esp_hw_support/test_apps/host_test_linux:
   enable:
     - if: IDF_TARGET == "linux"
 
 components/esp_hw_support/test_apps/mspi:
   disable:
-    - if: IDF_TARGET != "esp32s3"
+    - if: IDF_TARGET not in ["esp32s3", "esp32p4"]
 
 components/esp_hw_support/test_apps/mspi_psram_with_dfs:
   disable:
@@ -54,9 +32,7 @@ components/esp_hw_support/test_apps/rtc_8md256:
 
 components/esp_hw_support/test_apps/rtc_clk:
   disable:
-    - if: IDF_TARGET in ["esp32c6", "esp32h2", "esp32p4"]
-      temporary: true
-      reason: Unsupported on C6 for now. TODO IDF-5645, TODO IDF-7514
+    - if: SOC_CLK_TREE_SUPPORTED != 1
 
 components/esp_hw_support/test_apps/rtc_power_modes:
   enable:
@@ -64,6 +40,15 @@ components/esp_hw_support/test_apps/rtc_power_modes:
       temporary: true
       reason: the other targets are not tested yet
 
+components/esp_hw_support/test_apps/sleep_retention:
+  enable:
+    - if: SOC_PAU_SUPPORTED == 1 and SOC_LIGHT_SLEEP_SUPPORTED == 1 and CONFIG_NAME != "xip_psram"
+    - if: SOC_PAU_SUPPORTED == 1 and SOC_LIGHT_SLEEP_SUPPORTED == 1 and (SOC_SPIRAM_XIP_SUPPORTED == 1 and CONFIG_NAME == "xip_psram")
+
+components/esp_hw_support/test_apps/vad_wakeup:
+  disable:
+    - if: SOC_LP_VAD_SUPPORTED != 1
+
 components/esp_hw_support/test_apps/wakeup_tests:
   disable:
-    - if: IDF_TARGET in ["esp32c5", "esp32p4", "linux"]
+    - if: IDF_TARGET in ["esp32c5", "esp32p4", "linux", "esp32c61", "esp32h21", "esp32h4"]   # TODO: PM-337

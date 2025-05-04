@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -20,11 +20,12 @@
 extern "C" {
 #endif
 
-///< MMU is per target
-#define MMU_LL_MMU_PER_TARGET    1
-
 #define MMU_LL_FLASH_MMU_ID      0
 #define MMU_LL_PSRAM_MMU_ID      1
+#define MMU_LL_FLASH_VADDR_TO_PSRAM_VADDR(flash_vaddr)  ((flash_vaddr) + SOC_IRAM_FLASH_PSRAM_OFFSET)
+#define MMU_LL_PSRAM_VADDR_TO_FLASH_VADDR(psram_vaddr)  ((psram_vaddr) - SOC_IRAM_FLASH_PSRAM_OFFSET)
+#define MMU_LL_END_DROM_ENTRY_VADDR                     (SOC_DRAM_FLASH_ADDRESS_HIGH - SOC_MMU_PAGE_SIZE)
+#define MMU_LL_END_DROM_ENTRY_ID                        (SOC_MMU_ENTRY_NUM - 1)
 
 /**
  * Convert MMU virtual address to linear address
@@ -81,6 +82,28 @@ static inline mmu_target_t mmu_ll_vaddr_to_target(uint32_t vaddr)
     }
 
     return target;
+}
+
+/**
+ * Convert MMU virtual address to MMU ID
+ *
+ * @param vaddr    virtual address
+ *
+ * @return MMU ID
+ */
+__attribute__((always_inline))
+static inline uint32_t mmu_ll_vaddr_to_id(uint32_t vaddr)
+{
+    uint32_t id = 0;
+    if (vaddr >= SOC_DRAM_FLASH_ADDRESS_LOW && vaddr < SOC_DRAM_FLASH_ADDRESS_HIGH) {
+        id = MMU_LL_FLASH_MMU_ID;
+    } else if (vaddr >= SOC_DRAM_PSRAM_ADDRESS_LOW && vaddr < SOC_DRAM_PSRAM_ADDRESS_HIGH) {
+        id = MMU_LL_PSRAM_MMU_ID;
+    } else {
+        HAL_ASSERT(0);
+    }
+
+    return id;
 }
 
 __attribute__((always_inline)) static inline bool mmu_ll_cache_encryption_enabled(void)
@@ -344,7 +367,7 @@ static inline void mmu_ll_unmap_all(uint32_t mmu_id)
  * @param mmu_id   MMU ID
  * @param entry_id MMU entry ID
  *
- * @return         Ture for MMU entry is valid; False for invalid
+ * @return         True for MMU entry is valid; False for invalid
  */
 static inline bool mmu_ll_check_entry_valid(uint32_t mmu_id, uint32_t entry_id)
 {

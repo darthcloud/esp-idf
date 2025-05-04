@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -29,6 +29,10 @@
 #include "soc/temperature_sensor_periph.h"
 #include "esp_memory_utils.h"
 #include "esp_private/sar_periph_ctrl.h"
+#include "esp_sleep.h"
+#if TEMPERATURE_SENSOR_USE_RETENTION_LINK
+#include "esp_private/sleep_retention.h"
+#endif
 
 static const char *TAG = "temperature_sensor";
 
@@ -93,6 +97,26 @@ static void IRAM_ATTR temperature_sensor_isr(void *arg)
 }
 #endif // SOC_TEMPERATURE_SENSOR_INTR_SUPPORT
 
+#if TEMPERATURE_SENSOR_USE_RETENTION_LINK
+static esp_err_t s_temperature_sensor_sleep_retention_init(void *arg)
+{
+    esp_err_t ret = sleep_retention_entries_create(temperature_sensor_regs_retention.link_list, temperature_sensor_regs_retention.link_num, REGDMA_LINK_PRI_TEMPERATURE_SENSOR, temperature_sensor_regs_retention.module_id);
+    ESP_RETURN_ON_ERROR(ret, TAG, "failed to allocate mem for sleep retention");
+    return ret;
+}
+
+void temperature_sensor_create_retention_module(temperature_sensor_handle_t tsens)
+{
+    sleep_retention_module_t module_id = temperature_sensor_regs_retention.module_id;
+    if (sleep_retention_is_module_inited(module_id) && !sleep_retention_is_module_created(module_id)) {
+        if (sleep_retention_module_allocate(module_id) != ESP_OK) {
+            // even though the sleep retention module_id create failed, temperature sensor driver should still work, so just warning here
+            ESP_LOGW(TAG, "create retention link failed, power domain won't be turned off during sleep");
+        }
+    }
+}
+#endif // TEMPERATURE_SENSOR_USE_RETENTION_LINK
+
 esp_err_t temperature_sensor_install(const temperature_sensor_config_t *tsens_config, temperature_sensor_handle_t *ret_tsens)
 {
 #if CONFIG_TEMP_SENSOR_ENABLE_DEBUG_LOG
@@ -103,8 +127,37 @@ esp_err_t temperature_sensor_install(const temperature_sensor_config_t *tsens_co
     ESP_RETURN_ON_FALSE((s_tsens_attribute_copy == NULL), ESP_ERR_INVALID_STATE, TAG, "Already installed");
     temperature_sensor_handle_t tsens = NULL;
     tsens = (temperature_sensor_obj_t *) heap_caps_calloc(1, sizeof(temperature_sensor_obj_t), MALLOC_CAP_DEFAULT);
-    ESP_GOTO_ON_FALSE(tsens != NULL, ESP_ERR_NO_MEM, err, TAG, "no mem for temp sensor");
-    tsens->clk_src = tsens_config->clk_src;
+    ESP_RETURN_ON_FALSE((tsens != NULL), ESP_ERR_NO_MEM, TAG, "no mem for temp sensor");
+    if (tsens->clk_src == 0) {
+        tsens->clk_src = TEMPERATURE_SENSOR_CLK_SRC_DEFAULT;
+    } else {
+        tsens->clk_src = tsens_config->clk_src;
+    }
+
+#if !SOC_TEMPERATURE_SENSOR_SUPPORT_SLEEP_RETENTION
+    ESP_RETURN_ON_FALSE(tsens_config->flags.allow_pd == 0, ESP_ERR_NOT_SUPPORTED, TAG, "not able to power down in light sleep");
+#endif // SOC_TEMPERATURE_SENSOR_SUPPORT_SLEEP_RETENTION
+
+#if SOC_TEMPERATURE_SENSOR_SUPPORT_SLEEP_RETENTION && !SOC_TEMPERATURE_SENSOR_UNDER_PD_TOP_DOMAIN
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+#endif
+
+#if TEMPERATURE_SENSOR_USE_RETENTION_LINK
+    sleep_retention_module_init_param_t init_param = {
+        .cbs = { .create = { .handle = s_temperature_sensor_sleep_retention_init, .arg = (void *)tsens } }
+    };
+    ret = sleep_retention_module_init(temperature_sensor_regs_retention.module_id, &init_param);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "init sleep retention failed, power domain may be turned off during sleep");
+    }
+
+    if (tsens_config->flags.allow_pd != 0) {
+        temperature_sensor_create_retention_module(tsens);
+    }
+#endif // TEMPERATURE_SENSOR_USE_RETENTION_LINK
+
+    temperature_sensor_power_acquire();
+    temperature_sensor_ll_clk_sel(tsens->clk_src);
 
     ESP_GOTO_ON_ERROR(temperature_sensor_attribute_table_sort(), err, TAG, "Table sort failed");
     ESP_GOTO_ON_ERROR(temperature_sensor_choose_best_range(tsens, tsens_config), err, TAG, "Cannot select the correct range");
@@ -141,6 +194,22 @@ esp_err_t temperature_sensor_uninstall(temperature_sensor_handle_t tsens)
     }
 #endif // SOC_TEMPERATURE_SENSOR_INTR_SUPPORT
 
+#if TEMPERATURE_SENSOR_USE_RETENTION_LINK
+    sleep_retention_module_t module_id = temperature_sensor_regs_retention.module_id;
+    if (sleep_retention_is_module_created(module_id)) {
+        sleep_retention_module_free(temperature_sensor_regs_retention.module_id);
+    }
+    if (sleep_retention_is_module_inited(module_id)) {
+        sleep_retention_module_deinit(temperature_sensor_regs_retention.module_id);
+    }
+#endif // TEMPERATURE_SENSOR_USE_RETENTION_LINK
+
+#if SOC_TEMPERATURE_SENSOR_SUPPORT_SLEEP_RETENTION && !SOC_TEMPERATURE_SENSOR_UNDER_PD_TOP_DOMAIN
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+#endif
+
+    temperature_sensor_power_release();
+
     free(tsens);
     return ESP_OK;
 }
@@ -175,9 +244,7 @@ esp_err_t temperature_sensor_enable(temperature_sensor_handle_t tsens)
     temperature_sensor_ll_sample_enable(true);
 #endif // SOC_TEMPERATURE_SENSOR_INTR_SUPPORT
 
-    temperature_sensor_ll_clk_sel(tsens->clk_src);
-    temperature_sensor_power_acquire();
-    // After enabling/reseting the temperature sensor,
+    // After enabling/resetting the temperature sensor,
     // the output value gradually approaches the true temperature
     // value as the measurement time increases. 300us is recommended.
     esp_rom_delay_us(300);
@@ -190,7 +257,6 @@ esp_err_t temperature_sensor_disable(temperature_sensor_handle_t tsens)
     ESP_RETURN_ON_FALSE(tsens, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
     ESP_RETURN_ON_FALSE(tsens->fsm == TEMP_SENSOR_FSM_ENABLE, ESP_ERR_INVALID_STATE, TAG, "tsens not enabled yet");
 
-    temperature_sensor_power_release();
 #if SOC_TEMPERATURE_SENSOR_INTR_SUPPORT
     temperature_sensor_ll_wakeup_enable(false);
     temperature_sensor_ll_sample_enable(false);

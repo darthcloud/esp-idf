@@ -11,7 +11,11 @@
 #include "esp_log.h"
 #include "esp_rom_gpio.h"
 #include "esp32c5/rom/spi_flash.h"
+#include "esp32c5/rom/efuse.h"
 #include "soc/gpio_periph.h"
+#include "soc/io_mux_reg.h"
+#include "esp_rom_efuse.h"
+#include "soc/efuse_reg.h"
 #include "soc/spi_reg.h"
 #include "soc/spi_mem_reg.h"
 #include "soc/soc_caps.h"
@@ -24,11 +28,18 @@
 #include "hal/mmu_ll.h"
 #include "hal/cache_hal.h"
 #include "hal/cache_ll.h"
+#include "hal/mspi_ll.h"
+#include "bootloader_flash_override.h"
 
 void bootloader_flash_update_id()
 {
     esp_rom_spiflash_chip_t *chip = &rom_spiflash_legacy_data->chip;
     chip->device_id = bootloader_read_flash_id();
+}
+
+void bootloader_flash_update_size(uint32_t size)
+{
+    rom_spiflash_legacy_data->chip.chip_size = size;
 }
 
 void IRAM_ATTR bootloader_flash_cs_timing_config()
@@ -38,8 +49,18 @@ void IRAM_ATTR bootloader_flash_cs_timing_config()
     SET_PERI_REG_BITS(SPI_MEM_CTRL2_REG(0), SPI_MEM_CS_SETUP_TIME_V, 0, SPI_MEM_CS_SETUP_TIME_S);
 }
 
+void IRAM_ATTR bootloader_init_mspi_clock(void)
+{
+    // Set source mspi pll clock as 80M in bootloader stage.
+    // SPLL clock on C5 is 480MHz , and mspi_pll needs 80MHz
+    // in this stage, set divider as 6
+    _mspi_timing_ll_set_flash_clk_src(0, FLASH_CLK_SRC_SPLL);
+    mspi_ll_fast_set_hs_divider(6);
+}
+
 void IRAM_ATTR bootloader_flash_clock_config(const esp_image_header_t *pfhdr)
 {
+    bootloader_init_mspi_clock();
     uint32_t spi_clk_div = 0;
     switch (pfhdr->spi_speed) {
     case ESP_IMAGE_SPI_SPEED_DIV_1:
@@ -64,12 +85,12 @@ static const char *TAG = "boot.esp32c5";
 
 void IRAM_ATTR bootloader_configure_spi_pins(int drv)
 {
-    uint8_t clk_gpio_num = SPI_CLK_GPIO_NUM;
-    uint8_t q_gpio_num   = SPI_Q_GPIO_NUM;
-    uint8_t d_gpio_num   = SPI_D_GPIO_NUM;
-    uint8_t cs0_gpio_num = SPI_CS0_GPIO_NUM;
-    uint8_t hd_gpio_num  = SPI_HD_GPIO_NUM;
-    uint8_t wp_gpio_num  = SPI_WP_GPIO_NUM;
+    uint8_t clk_gpio_num = MSPI_IOMUX_PIN_NUM_CLK;
+    uint8_t q_gpio_num   = MSPI_IOMUX_PIN_NUM_MISO;
+    uint8_t d_gpio_num   = MSPI_IOMUX_PIN_NUM_MOSI;
+    uint8_t cs0_gpio_num = MSPI_IOMUX_PIN_NUM_CS0;
+    uint8_t hd_gpio_num  = MSPI_IOMUX_PIN_NUM_HD;
+    uint8_t wp_gpio_num  = MSPI_IOMUX_PIN_NUM_WP;
     esp_rom_gpio_pad_set_drv(clk_gpio_num, drv);
     esp_rom_gpio_pad_set_drv(q_gpio_num,   drv);
     esp_rom_gpio_pad_set_drv(d_gpio_num,   drv);
@@ -96,6 +117,9 @@ static void update_flash_config(const esp_image_header_t *bootloader_hdr)
         break;
     case ESP_IMAGE_FLASH_SIZE_16MB:
         size = 16;
+        break;
+    case ESP_IMAGE_FLASH_SIZE_32MB:
+        size = 32;
         break;
     default:
         size = 2;
@@ -173,6 +197,9 @@ static void print_flash_info(const esp_image_header_t *bootloader_hdr)
     case ESP_IMAGE_FLASH_SIZE_16MB:
         str = "16MB";
         break;
+    case ESP_IMAGE_FLASH_SIZE_32MB:
+        str = "32MB";
+        break;
     default:
         str = "2MB";
         break;
@@ -194,12 +221,21 @@ static void bootloader_spi_flash_resume(void)
 
 esp_err_t bootloader_init_spi_flash(void)
 {
+    bootloader_init_mspi_clock();
+
     bootloader_init_flash_configure();
     bootloader_spi_flash_resume();
+    if ((void*)bootloader_flash_unlock != (void*)bootloader_flash_unlock_default) {
+        ESP_EARLY_LOGD(TAG, "Using overridden bootloader_flash_unlock");
+    }
     bootloader_flash_unlock();
 
 #if CONFIG_ESPTOOLPY_FLASHMODE_QIO || CONFIG_ESPTOOLPY_FLASHMODE_QOUT
     bootloader_enable_qio_mode();
+#endif
+
+#if CONFIG_BOOTLOADER_CACHE_32BIT_ADDR_QUAD_FLASH
+    bootloader_flash_32bits_address_map_enable(bootloader_flash_get_spi_mode());
 #endif
 
     print_flash_info(&bootloader_image_hdr);
@@ -269,6 +305,10 @@ void bootloader_flash_hardware_init(void)
 
     bootloader_spi_flash_resume();
     bootloader_flash_unlock();
+
+#if CONFIG_BOOTLOADER_CACHE_32BIT_ADDR_QUAD_FLASH
+    bootloader_flash_32bits_address_map_enable(bootloader_flash_get_spi_mode());
+#endif
 
     cache_hal_disable(CACHE_LL_LEVEL_EXT_MEM, CACHE_TYPE_ALL);
     update_flash_config(&hdr);

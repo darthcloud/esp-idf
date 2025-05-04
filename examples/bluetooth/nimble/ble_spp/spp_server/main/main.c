@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -355,7 +355,7 @@ void ble_server_uart_task(void *pvParameters)
         //Waiting for UART event.
         if (xQueueReceive(spp_common_uart_queue, (void * )&event, (TickType_t)portMAX_DELAY))            {
             switch (event.type) {
-            //Event of UART receving data
+            //Event of UART receiving data
             case UART_DATA:
                 if (event.size) {
                     uint8_t *ntf;
@@ -367,7 +367,7 @@ void ble_server_uart_task(void *pvParameters)
                         /* Check if client has subscribed to notifications */
                         if (conn_handle_subs[i]) {
                             struct os_mbuf *txom;
-                            txom = ble_hs_mbuf_from_flat(ntf, sizeof(ntf));
+                            txom = ble_hs_mbuf_from_flat(ntf, event.size);
                             rc = ble_gatts_notify_custom(i, ble_spp_svc_gatt_read_val_handle,
                                                          txom);
                             if (rc == 0) {
@@ -377,6 +377,8 @@ void ble_server_uart_task(void *pvParameters)
                             }
                         }
                     }
+
+		    free(ntf);
                 }
                 break;
             default:

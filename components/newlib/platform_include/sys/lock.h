@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -7,6 +7,10 @@
 
 #include_next <sys/lock.h>
 #include "sdkconfig.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #ifdef _RETARGETABLE_LOCKING
 
@@ -19,13 +23,13 @@
  */
 struct __lock {
 #if (CONFIG_FREERTOS_USE_LIST_DATA_INTEGRITY_CHECK_BYTES && CONFIG_FREERTOS_USE_TRACE_FACILITY)
-   int reserved[29];
+    int reserved[29];
 #elif (CONFIG_FREERTOS_USE_LIST_DATA_INTEGRITY_CHECK_BYTES && !CONFIG_FREERTOS_USE_TRACE_FACILITY)
-   int reserved[27];
+    int reserved[27];
 #elif (!CONFIG_FREERTOS_USE_LIST_DATA_INTEGRITY_CHECK_BYTES && CONFIG_FREERTOS_USE_TRACE_FACILITY)
-   int reserved[23];
+    int reserved[23];
 #else
-   int reserved[21];
+    int reserved[21];
 #endif /* #if (CONFIG_FREERTOS_USE_LIST_DATA_INTEGRITY_CHECK_BYTES && CONFIG_FREERTOS_USE_TRACE_FACILITY) */
 };
 
@@ -48,4 +52,12 @@ int _lock_try_acquire_recursive(_lock_t *plock);
 void _lock_release(_lock_t *plock);
 void _lock_release_recursive(_lock_t *plock);
 
+#if CONFIG_LIBC_PICOLIBC
+#define __lock_try_acquire(lock) _lock_try_acquire(&(lock))
+#define __lock_try_acquire_recursive(lock) _lock_try_acquire_recursive(&(lock))
+#endif // CONFIG_LIBC_PICOLIBC
 #endif // _RETARGETABLE_LOCKING
+
+#ifdef __cplusplus
+}
+#endif

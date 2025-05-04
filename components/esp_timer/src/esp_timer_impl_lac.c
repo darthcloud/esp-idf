@@ -1,9 +1,10 @@
 /*
- * SPDX-FileCopyrightText: 2017-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2017-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "sdkconfig.h"
 #include "sys/param.h"
 #include "esp_timer_impl.h"
 #include "esp_timer.h"
@@ -88,7 +89,7 @@ static const char* TAG = "esp_timer_impl";
 
 /* Interrupt handle returned by the interrupt allocator */
 #ifdef CONFIG_ESP_TIMER_ISR_AFFINITY_NO_AFFINITY
-#define ISR_HANDLERS (portNUM_PROCESSORS)
+#define ISR_HANDLERS (CONFIG_FREERTOS_NUMBER_OF_CORES)
 #else
 #define ISR_HANDLERS (1)
 #endif
@@ -105,7 +106,7 @@ extern portMUX_TYPE s_time_update_lock;
 /* Alarm values to generate interrupt on match */
 extern uint64_t timestamp_id[2];
 
-uint64_t IRAM_ATTR esp_timer_impl_get_counter_reg(void)
+uint64_t ESP_TIMER_IRAM_ATTR esp_timer_impl_get_counter_reg(void)
 {
     uint32_t lo, hi;
     uint32_t lo_start = REG_READ(COUNT_LO_REG);
@@ -136,14 +137,14 @@ uint64_t IRAM_ATTR esp_timer_impl_get_counter_reg(void)
     return result.val;
 }
 
-int64_t IRAM_ATTR esp_timer_impl_get_time(void)
+int64_t ESP_TIMER_IRAM_ATTR esp_timer_impl_get_time(void)
 {
     return esp_timer_impl_get_counter_reg() / TICKS_PER_US;
 }
 
 int64_t esp_timer_get_time(void) __attribute__((alias("esp_timer_impl_get_time")));
 
-void IRAM_ATTR esp_timer_impl_set_alarm_id(uint64_t timestamp, unsigned alarm_id)
+void ESP_TIMER_IRAM_ATTR esp_timer_impl_set_alarm_id(uint64_t timestamp, unsigned alarm_id)
 {
     assert(alarm_id < sizeof(timestamp_id) / sizeof(timestamp_id[0]));
     portENTER_CRITICAL_SAFE(&s_time_update_lock);
@@ -173,7 +174,7 @@ void IRAM_ATTR esp_timer_impl_set_alarm_id(uint64_t timestamp, unsigned alarm_id
     portEXIT_CRITICAL_SAFE(&s_time_update_lock);
 }
 
-static void IRAM_ATTR timer_alarm_isr(void *arg)
+static void ESP_TIMER_IRAM_ATTR timer_alarm_isr(void *arg)
 {
 #if ISR_HANDLERS == 1
     /* Clear interrupt status */
@@ -219,13 +220,13 @@ static void IRAM_ATTR timer_alarm_isr(void *arg)
 #endif // ISR_HANDLERS != 1
 }
 
-void IRAM_ATTR esp_timer_impl_update_apb_freq(uint32_t apb_ticks_per_us)
+void ESP_TIMER_IRAM_ATTR esp_timer_impl_update_apb_freq(uint32_t apb_ticks_per_us)
 {
-    portENTER_CRITICAL(&s_time_update_lock);
+    portENTER_CRITICAL_SAFE(&s_time_update_lock);
     assert(apb_ticks_per_us >= 3 && "divider value too low");
     assert(apb_ticks_per_us % TICKS_PER_US == 0 && "APB frequency (in MHz) should be divisible by TICK_PER_US");
     REG_SET_FIELD(CONFIG_REG, TIMG_LACT_DIVIDER, apb_ticks_per_us / TICKS_PER_US);
-    portEXIT_CRITICAL(&s_time_update_lock);
+    portEXIT_CRITICAL_SAFE(&s_time_update_lock);
 }
 
 void esp_timer_impl_set(uint64_t new_us)
@@ -277,7 +278,10 @@ esp_err_t esp_timer_impl_init(intr_handler_t alarm_handler)
 
     int isr_flags = ESP_INTR_FLAG_INTRDISABLED
                     | ((1 << CONFIG_ESP_TIMER_INTERRUPT_LEVEL) & ESP_INTR_FLAG_LEVELMASK)
-                    | ESP_INTR_FLAG_IRAM;
+#if CONFIG_ESP_TIMER_IN_IRAM
+                    | ESP_INTR_FLAG_IRAM
+#endif
+                    ;
 
     esp_err_t err = esp_intr_alloc(INTR_SOURCE_LACT, isr_flags,
                                    &timer_alarm_isr, NULL,

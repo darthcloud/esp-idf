@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -7,6 +7,7 @@
 #include "sdkconfig.h"
 #include "esp_vfs.h"
 #include "esp_vfs_common.h"
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,32 +20,13 @@ extern "C" {
 #endif
 
 typedef struct vfs_entry_ {
-    esp_vfs_t vfs;          // contains pointers to VFS functions
-    char path_prefix[ESP_VFS_PATH_MAX]; // path prefix mapped to this VFS
-    size_t path_prefix_len; // micro-optimization to avoid doing extra strlen
-    void* ctx;              // optional pointer which can be passed to VFS
-    int offset;             // index of this structure in s_vfs array
+    int flags;                   /*!< ESP_VFS_FLAG_CONTEXT_PTR and/or ESP_VFS_FLAG_READONLY_FS or ESP_VFS_FLAG_DEFAULT */
+    const esp_vfs_fs_ops_t *vfs; /*!< contains pointers to VFS functions */
+    void *ctx;                   /*!< optional pointer which can be passed to VFS */
+    int offset;                  /*!< index of this structure in s_vfs array */
+    size_t path_prefix_len;      /*!< micro-optimization to avoid doing extra strlen, contains length of the string, not the size of path_prefix array */
+    const char path_prefix[]; /*!< path prefix mapped to this VFS */
 } vfs_entry_t;
-
-/**
- * @brief get pointer of cdcacm vfs.
- *
- * This function is called in vfs_console in order to get the vfs implementation
- * of cdcacm.
- *
- * @return pointer to structure esp_vfs_t
- */
-const esp_vfs_t *esp_vfs_cdcacm_get_vfs(void);
-
-/**
- * @brief get pointer of usb_serial_jtag vfs.
- *
- * This function is called in vfs_console in order to get the vfs implementation
- * of usb_serial_jtag.
- *
- * @return pointer to structure esp_vfs_nonblocking_console_t
- */
-const esp_vfs_t *esp_vfs_usb_serial_jtag_get_vfs(void);
 
 /**
  * Register a virtual filesystem.
@@ -72,7 +54,7 @@ const esp_vfs_t *esp_vfs_usb_serial_jtag_get_vfs(void);
  *          ESP_ERR_NO_MEM if too many VFSes are registered.
  *          ESP_ERR_INVALID_ARG if given an invalid parameter.
  */
-esp_err_t esp_vfs_register_common(const char *base_path, size_t len, const esp_vfs_t* vfs, void* ctx, int *vfs_index);
+esp_err_t esp_vfs_register_common(const char *base_path, size_t len, const esp_vfs_t *vfs, void *ctx, int *vfs_index);
 
 /**
  * Get vfs fd with given path.

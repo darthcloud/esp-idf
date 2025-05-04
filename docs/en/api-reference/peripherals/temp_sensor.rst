@@ -46,6 +46,7 @@ The description of the temperature sensor functionality is divided into the foll
     - :ref:`temp-power-management` - covers how the temperature sensor is affected when changing power mode (e.g., Light-sleep mode).
     :SOC_TEMPERATURE_SENSOR_INTR_SUPPORT: - :ref:`temp-iram-safe` - describes tips on how to make the temperature sensor interrupt work better along with a disabled cache.
     - :ref:`temp-thread-safety` - covers how to make the driver to be thread-safe.
+    :SOC_TEMPERATURE_SENSOR_SUPPORT_ETM: - :ref:`temperature-sensor-etm-event-and-task` - describes what the events and tasks can be connected to the ETM channel.
 
 .. _temp-resource-allocation:
 
@@ -58,6 +59,7 @@ In order to install a built-in temperature sensor instance, the first thing is t
 
 - :cpp:member:`range_min`: The minimum value of the testing range you have evaluated.
 - :cpp:member:`range_max`: The maximum value of the testing range you have evaluated.
+- :cpp:member:`allow_pd` configures if the driver allows the system to power down the peripheral in light sleep mode. Before entering sleep, the system will backup the temperature sensor register context, which will be restored later when the system exit the sleep mode. Powering down the peripheral can save more power, but at the cost of more memory consumed to save the register context. It's a tradeoff between power consumption and memory consumption. This configuration option relies on specific hardware feature, if you enable it on an unsupported chip, you will see error message like ``not able to power down in light sleep``.
 
 After the ranges are set, the structure could be passed to :cpp:func:`temperature_sensor_install`, which will instantiate the temperature sensor instance and return a handle.
 
@@ -74,11 +76,8 @@ Creating a Temperature Sensor Handle
 .. code:: c
 
     temperature_sensor_handle_t temp_handle = NULL;
-    temperature_sensor_config_t temp_sensor = {
-        .range_min = 20,
-        .range_max = 50,
-    };
-    ESP_ERROR_CHECK(temperature_sensor_install(&temp_sensor, &temp_handle));
+    temperature_sensor_config_t temp_sensor_config = TEMPERATURE_SENSOR_CONFIG_DEFAULT(20, 50);
+    ESP_ERROR_CHECK(temperature_sensor_install(&temp_sensor_config, &temp_handle));
 
 .. _temp-enable-and-disable-temperature-sensor:
 
@@ -180,6 +179,21 @@ Thread Safety
 
 In the temperature sensor driver, we do not add any protection to ensure the thread safety, because typically this driver is only supposed to be used in one task. If you have to use this driver in different tasks, please add extra locks to protect it.
 
+.. only:: SOC_TEMPERATURE_SENSOR_SUPPORT_ETM
+
+    .. _temperature-sensor-etm-event-and-task:
+
+    ETM Event and Task
+    ^^^^^^^^^^^^^^^^^^
+
+    Temperature Sensor is able to generate events that can interact with the :doc:`ETM </api-reference/peripherals/etm>` module. The supported events are listed in the :cpp:type:`temperature_sensor_etm_event_type_t`. You can call :cpp:func:`temperature_sensor_new_etm_event` to get the corresponding ETM event handle. The supported tasks are listed in the :cpp:type:`temperature_sensor_etm_task_type_t`. You can call :cpp:func:`temperature_sensor_new_etm_task` to get the corresponding ETM task handle.
+
+    .. note::
+
+        - :cpp:enumerator:`TEMPERATURE_SENSOR_EVENT_OVER_LIMIT` for :cpp:member:`temperature_sensor_etm_event_type_t::event_type` depends on what kind of threshold you set first. If you set the absolute threshold by :cpp:func:`temperature_sensor_set_absolute_threshold`, then the :cpp:enumerator:`TEMPERATURE_SENSOR_EVENT_OVER_LIMIT` refers to absolute threshold. Likewise, if you set the delta threshold by :cpp:func:`temperature_sensor_set_delta_threshold`, then the :cpp:enumerator:`TEMPERATURE_SENSOR_EVENT_OVER_LIMIT` refers to delta threshold.
+
+    For how to connect the event and task to an ETM channel, please refer to the :doc:`ETM </api-reference/peripherals/etm>` documentation.
+
 Unexpected Behaviors
 --------------------
 
@@ -190,15 +204,22 @@ Unexpected Behaviors
     (1) Totally out of range, like 200 °C ~ 300 °C.
     (2) Cross the boundary of each predefined measurement. like 40 °C ~ 110 °C.
 
-Application Example
--------------------
+Application Examples
+--------------------
 
-.. list::
+* :example:`peripherals/temperature_sensor/temp_sensor` demonstrates how to use the built-in temperature sensor, showcasing the measurement range and error based on different DAC levels and offsets.
 
-    * Temperature sensor reading example: :example:`peripherals/temperature_sensor/temp_sensor`.
-    :SOC_TEMPERATURE_SENSOR_INTR_SUPPORT: * Temperature sensor value monitor example: :example:`peripherals/temperature_sensor/temp_sensor_monitor`.
+.. only:: SOC_TEMPERATURE_SENSOR_INTR_SUPPORT
+
+  * :example:`peripherals/temperature_sensor/temp_sensor_monitor` demonstrates how to use the temperature sensor to automatically monitor temperature values continuously, triggering an interrupt when a specific value is reached or when the change between two consecutive samplings is larger/smaller than the settings.
+
 
 API Reference
 ----------------------------------
 
 .. include-build-file:: inc/temperature_sensor.inc
+.. include-build-file:: inc/temperature_sensor_types.inc
+
+.. only:: SOC_TEMPERATURE_SENSOR_SUPPORT_ETM
+
+    .. include-build-file:: inc/temperature_sensor_etm.inc

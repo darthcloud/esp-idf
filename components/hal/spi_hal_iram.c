@@ -1,16 +1,21 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 // The HAL layer for SPI (common part, in iram)
-// make these functions in a seperate file to make sure all LL functions are in the IRAM.
+// make these functions in a separate file to make sure all LL functions are in the IRAM.
 
 #include "hal/spi_hal.h"
+#include "hal/log.h"
 #include "hal/assert.h"
+#include "hal/gpio_ll.h"    //for GPIO_LL_MATRIX_DELAY_NS
 #include "soc/ext_mem_defs.h"
 #include "soc/soc_caps.h"
+
+/* The tag may be unused if log level is set to NONE  */
+static __attribute__((unused)) char SPI_HAL_TAG[] = "spi_hal";
 
 void spi_hal_setup_device(spi_hal_context_t *hal, const spi_hal_dev_config_t *dev)
 {
@@ -21,6 +26,7 @@ void spi_hal_setup_device(spi_hal_context_t *hal, const spi_hal_dev_config_t *de
 #endif
     spi_ll_master_set_pos_cs(hw, dev->cs_pin_id, dev->positive_cs);
     spi_ll_master_set_clock_by_reg(hw, &dev->timing_conf.clock_reg);
+    spi_ll_master_set_rx_timing_mode(hw, dev->timing_conf.rx_sample_point);
     //Configure bit order
     spi_ll_set_rx_lsbfirst(hw, dev->rx_lsbfirst);
     spi_ll_set_tx_lsbfirst(hw, dev->tx_lsbfirst);
@@ -33,6 +39,90 @@ void spi_hal_setup_device(spi_hal_context_t *hal, const spi_hal_dev_config_t *de
     spi_ll_master_set_cs_hold(hw, dev->cs_hold);
     spi_ll_master_select_cs(hw, dev->cs_pin_id);
 }
+
+esp_err_t spi_hal_cal_clock_conf(const spi_hal_timing_param_t *timing_param, spi_hal_timing_conf_t *timing_conf)
+{
+    spi_ll_clock_val_t reg_val;
+    int dummy, miso_delay;
+    int eff_clk_n = spi_ll_master_cal_clock(timing_param->clk_src_hz, timing_param->expected_freq, timing_param->duty_cycle, &reg_val);
+
+    //When the speed is too fast, we may need to use dummy cycles to compensate the reading.
+    //But these don't work for full-duplex connections.
+    spi_hal_cal_timing(timing_param->clk_src_hz, eff_clk_n, timing_param->use_gpio, timing_param->input_delay_ns, &dummy, &miso_delay);
+
+#if SPI_LL_SUPPORT_TIME_TUNING
+    const int freq_limit = spi_hal_get_freq_limit(timing_param->use_gpio, timing_param->input_delay_ns);
+
+    if (!(timing_param->half_duplex || dummy == 0 || timing_param->no_compensate)) {
+        // This only a short log used as a "key" of the idf hint system, see `hints.yml`
+        HAL_EARLY_LOGE(SPI_HAL_TAG,"The clock_speed_hz should less than %d", freq_limit);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+#endif
+
+    if (timing_conf) {
+        timing_conf->clock_reg = reg_val;
+        timing_conf->expect_freq = timing_param->expected_freq;
+        timing_conf->real_freq = eff_clk_n;
+        timing_conf->timing_dummy = dummy;
+        timing_conf->timing_miso_delay = miso_delay;
+    }
+    return ESP_OK;
+}
+
+void spi_hal_cal_timing(int source_freq_hz, int eff_clk, bool gpio_is_used, int input_delay_ns, int *dummy_n, int *miso_delay_n)
+{
+    const int apbclk_kHz = source_freq_hz / 1000;
+    //how many apb clocks a period has
+    const int spiclk_apb_n = source_freq_hz / eff_clk;
+    int gpio_delay_ns = 0;
+#if GPIO_LL_MATRIX_DELAY_NS
+    gpio_delay_ns = gpio_is_used ? GPIO_LL_MATRIX_DELAY_NS : 0;
+#endif
+
+    //how many apb clocks the delay is, the 1 is to compensate in case ``input_delay_ns`` is rounded off.
+    int delay_apb_n = (1 + input_delay_ns + gpio_delay_ns) * apbclk_kHz / 1000 / 1000;
+    if (delay_apb_n < 0) {
+        delay_apb_n = 0;
+    }
+
+    int dummy_required = delay_apb_n / spiclk_apb_n;
+
+    int miso_delay = 0;
+    if (dummy_required > 0) {
+        //due to the clock delay between master and slave, there's a range in which data is random
+        //give MISO a delay if needed to make sure we sample at the time MISO is stable
+        miso_delay = (dummy_required + 1) * spiclk_apb_n - delay_apb_n - 1;
+    } else {
+        //if the dummy is not required, maybe we should also delay half a SPI clock if the data comes too early
+        if (delay_apb_n * 4 <= spiclk_apb_n) {
+            miso_delay = -1;
+        }
+    }
+    *dummy_n = dummy_required;
+    *miso_delay_n = miso_delay;
+    HAL_EARLY_LOGD(SPI_HAL_TAG, "eff: %d, limit: %dk(/%d), %d dummy, %d delay", eff_clk / 1000, apbclk_kHz / (delay_apb_n + 1), delay_apb_n, dummy_required, miso_delay);
+}
+
+#if SPI_LL_SUPPORT_TIME_TUNING
+//TODO: IDF-6578
+int spi_hal_get_freq_limit(bool gpio_is_used, int input_delay_ns)
+{
+    const int apbclk_kHz = APB_CLK_FREQ / 1000;
+    int gpio_delay_ns = 0;
+#if GPIO_LL_MATRIX_DELAY_NS
+    gpio_delay_ns = gpio_is_used ? GPIO_LL_MATRIX_DELAY_NS : 0;
+#endif
+
+    //how many apb clocks the delay is, the 1 is to compensate in case ``input_delay_ns`` is rounded off.
+    int delay_apb_n = (1 + input_delay_ns + gpio_delay_ns) * apbclk_kHz / 1000 / 1000;
+    if (delay_apb_n < 0) {
+        delay_apb_n = 0;
+    }
+
+    return APB_CLK_FREQ / (delay_apb_n + 1);
+}
+#endif
 
 void spi_hal_setup_trans(spi_hal_context_t *hal, const spi_hal_dev_config_t *dev, const spi_hal_trans_config_t *trans)
 {
@@ -162,3 +252,42 @@ void spi_hal_fetch_result(const spi_hal_context_t *hal)
         spi_ll_read_buffer(hal->hw, trans->rcv_buffer, trans->rx_bitlen);
     }
 }
+
+#if SOC_SPI_SCT_SUPPORTED
+/*------------------------------------------------------------------------------
+ * Segmented-Configure-Transfer
+ *----------------------------------------------------------------------------*/
+void spi_hal_clear_intr_mask(spi_hal_context_t *hal, uint32_t mask) {
+    spi_ll_clear_intr(hal->hw, mask);
+}
+
+bool spi_hal_get_intr_mask(spi_hal_context_t *hal, uint32_t mask) {
+    return spi_ll_get_intr(hal->hw, mask);
+}
+
+void spi_hal_sct_set_conf_bits_len(spi_hal_context_t *hal, uint32_t conf_len) {
+    spi_ll_set_conf_phase_bits_len(hal->hw, conf_len);
+}
+
+void spi_hal_sct_init_conf_buffer(spi_hal_context_t *hal, uint32_t conf_buffer[SOC_SPI_SCT_BUFFER_NUM_MAX])
+{
+    spi_ll_init_conf_buffer(hal->hw, conf_buffer);
+}
+
+void spi_hal_sct_format_conf_buffer(spi_hal_context_t *hal, const spi_hal_seg_config_t *config, const spi_hal_dev_config_t *dev, uint32_t conf_buffer[SOC_SPI_SCT_BUFFER_NUM_MAX])
+{
+    spi_ll_format_line_mode_conf_buff(hal->hw, hal->trans_config.line_mode, conf_buffer);
+    spi_ll_format_prep_phase_conf_buffer(hal->hw, config->cs_setup, conf_buffer);
+    spi_ll_format_cmd_phase_conf_buffer(hal->hw, config->cmd, config->cmd_bits, dev->tx_lsbfirst, conf_buffer);
+    spi_ll_format_addr_phase_conf_buffer(hal->hw, config->addr, config->addr_bits, dev->rx_lsbfirst, conf_buffer);
+    spi_ll_format_dummy_phase_conf_buffer(hal->hw, config->dummy_bits, conf_buffer);
+    spi_ll_format_dout_phase_conf_buffer(hal->hw, config->tx_bitlen, conf_buffer);
+    spi_ll_format_din_phase_conf_buffer(hal->hw, config->rx_bitlen, conf_buffer);
+    spi_ll_format_done_phase_conf_buffer(hal->hw, config->cs_hold, conf_buffer);
+    spi_ll_format_conf_phase_conf_buffer(hal->hw, config->seg_end, conf_buffer);
+#if SPI_LL_SUPPORT_SEG_GAP
+    spi_ll_format_conf_bitslen_buffer(hal->hw, config->seg_gap_len, conf_buffer);
+#endif
+}
+
+#endif  //#if SOC_SPI_SCT_SUPPORTED

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2016-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2016-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -11,10 +11,10 @@
 #include "esp_types.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_compiler.h"
 #include "freertos/FreeRTOS.h"
 #include "esp_private/regi2c_ctrl.h"
 #include "soc/regi2c_saradc.h"
-#include "esp_log.h"
 #include "esp_efuse_rtc_calib.h"
 #include "hal/temperature_sensor_ll.h"
 #include "driver/temp_sensor_types_legacy.h"
@@ -54,6 +54,7 @@ typedef enum {
 static tsens_hw_state_t tsens_hw_state = TSENS_HW_STATE_UNCONFIGURED;
 
 static float s_deltaT = NAN; // Unused number
+static int s_tsens_range;
 
 esp_err_t temp_sensor_set_config(temp_sensor_config_t tsens)
 {
@@ -64,7 +65,7 @@ esp_err_t temp_sensor_set_config(temp_sensor_config_t tsens)
     }
     temperature_sensor_ll_set_clk_div(tsens.clk_div);
     temp_sensor_sync_tsens_idx(tsens.dac_offset);
-    temperature_sensor_ll_set_range(dac_offset[tsens.dac_offset].reg_val);
+    s_tsens_range = dac_offset[tsens.dac_offset].reg_val;
     ESP_LOGI(TAG, "Config range [%d°C ~ %d°C], error < %d°C",
              dac_offset[tsens.dac_offset].range_min,
              dac_offset[tsens.dac_offset].range_max,
@@ -95,6 +96,7 @@ esp_err_t temp_sensor_start(void)
         err = ESP_ERR_INVALID_STATE;
     }
     temperature_sensor_power_acquire();
+    temperature_sensor_ll_set_range(s_tsens_range);
     temperature_sensor_ll_clk_sel(TEMPERATURE_SENSOR_CLK_SRC_DEFAULT);
     tsens_hw_state = TSENS_HW_STATE_STARTED;
     return err;
@@ -110,7 +112,13 @@ esp_err_t temp_sensor_stop(void)
 esp_err_t temp_sensor_read_raw(uint32_t *tsens_out)
 {
     ESP_RETURN_ON_FALSE(tsens_out != NULL, ESP_ERR_INVALID_ARG, TAG, "no tsens_out specified");
+    if (tsens_hw_state != TSENS_HW_STATE_STARTED) {
+        ESP_LOGE(TAG, "Has not been started");
+        return ESP_ERR_INVALID_STATE;
+    }
+    ESP_COMPILER_DIAGNOSTIC_PUSH_IGNORE("-Wanalyzer-use-of-uninitialized-value") // False-positive detection. TODO GCC-366
     *tsens_out = temperature_sensor_ll_get_raw_value();
+    ESP_COMPILER_DIAGNOSTIC_POP("-Wanalyzer-use-of-uninitialized-value")
     return ESP_OK;
 }
 
@@ -152,6 +160,7 @@ esp_err_t temp_sensor_read_celsius(float *celsius)
     return ESP_OK;
 }
 
+#if !CONFIG_TEMP_SENSOR_SKIP_LEGACY_CONFLICT_CHECK
 /**
  * @brief This function will be called during start up, to check that this legacy temp sensor driver is not running along with the new driver
  */
@@ -167,3 +176,4 @@ static void check_legacy_temp_sensor_driver_conflict(void)
     }
     ESP_EARLY_LOGW(TAG, "legacy driver is deprecated, please migrate to `driver/temperature_sensor.h`");
 }
+#endif //CONFIG_TEMP_SENSOR_SKIP_LEGACY_CONFLICT_CHECK

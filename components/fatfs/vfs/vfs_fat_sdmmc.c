@@ -140,7 +140,7 @@ static esp_err_t s_f_mount(sdmmc_card_t *card, FATFS *fs, const char *drv, uint8
         }
 
         ESP_LOGW(TAG, "mounting again");
-        res = f_mount(fs, drv, 0);
+        res = f_mount(fs, drv, 1);
         if (res != FR_OK) {
             err = ESP_FAIL;
             ESP_LOGD(TAG, "f_mount failed after formatting (%d)", res);
@@ -166,12 +166,17 @@ static esp_err_t mount_to_vfs_fat(const esp_vfs_fat_mount_config_t *mount_config
     char drv[3] = {(char)('0' + pdrv), ':', 0};
 
     // connect FATFS to VFS
-    err = esp_vfs_fat_register(base_path, drv, mount_config->max_files, &fs);
+    esp_vfs_fat_conf_t conf = {
+        .base_path = base_path,
+        .fat_drive = drv,
+        .max_files = mount_config->max_files,
+    };
+    err = esp_vfs_fat_register_cfg(&conf, &fs);
     *out_fs = fs;
     if (err == ESP_ERR_INVALID_STATE) {
         // it's okay, already registered with VFS
     } else if (err != ESP_OK) {
-        ESP_LOGD(TAG, "esp_vfs_fat_register failed 0x(%x)", err);
+        ESP_LOGD(TAG, "esp_vfs_fat_register_cfg failed 0x(%x)", err);
         goto fail;
     }
 
@@ -287,7 +292,7 @@ esp_err_t esp_vfs_fat_sdmmc_mount(const char* base_path,
         s_saved_ctx_id = 0;
     }
 
-    ctx = calloc(sizeof(vfs_fat_sd_ctx_t), 1);
+    ctx = calloc(1, sizeof(vfs_fat_sd_ctx_t));
     if (!ctx) {
         CHECK_EXECUTE_RESULT(ESP_ERR_NO_MEM, "no mem");
     }
@@ -385,7 +390,7 @@ esp_err_t esp_vfs_fat_sdspi_mount(const char* base_path,
         s_saved_ctx_id = 0;
     }
 
-    ctx = calloc(sizeof(vfs_fat_sd_ctx_t), 1);
+    ctx = calloc(1, sizeof(vfs_fat_sd_ctx_t));
     if (!ctx) {
         CHECK_EXECUTE_RESULT(ESP_ERR_NO_MEM, "no mem");
     }
@@ -495,8 +500,12 @@ esp_err_t esp_vfs_fat_sdcard_format_cfg(const char *base_path, sdmmc_card_t *car
 
     //format
     uint32_t id = FF_VOLUMES;
-    bool found = s_get_context_id_by_card(card, &id);
-    assert(found);
+
+    {
+        const bool found = s_get_context_id_by_card(card, &id);
+        (void)found;
+        assert(found);
+    }
 
     if (cfg) {
         s_ctx[id]->mount_config = *cfg;

@@ -13,10 +13,10 @@ Overview
     * :cpp:func:`esp_http_client_cleanup`: Closes the connection (if any) and frees up all the memory allocated to the HTTP client instance. This must be the last function to be called after the completion of operations.
 
 
-Application Example
--------------------
+Application Examples
+--------------------
 
-Simple example that uses ESP HTTP Client to make HTTP/S requests can be found at :example:`protocols/esp_http_client`.
+- :example:`protocols/esp_http_client` demonstrates how to use the ESP HTTP Client to make HTTP/S requests.
 
 
 Basic HTTP Request
@@ -28,23 +28,21 @@ Check out the example functions ``http_rest_with_url`` and ``http_rest_with_host
 Persistent Connections
 ----------------------
 
-Persistent connection means that the HTTP client can re-use the same connection for several exchanges. If the server does not request to close the connection with the ``Connection: close`` header, the connection is not dropped but is instead kept open and used for further requests.
+Persistent connection means that the HTTP client can reuse the same connection for several exchanges. If the server does not request to close the connection with the ``Connection: close`` header, the connection is not dropped but is instead kept open and used for further requests.
 
 To allow ESP HTTP client to take full advantage of persistent connections, one should make as many requests as possible using the same handle instance. Check out the example functions ``http_rest_with_url`` and ``http_rest_with_hostname_path`` in the application example. Here, once the connection is created, multiple requests (``GET``, ``POST``, ``PUT``, etc.) are made before the connection is closed.
 
-.. only:: esp32
+Use Secure Element (ATECC608) for TLS
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    Use Secure Element (ATECC608) for TLS
-    _____________________________________
+A secure element (ATECC608) can be also used for the underlying TLS connection in the HTTP client connection. Please refer to the **ATECC608A (Secure Element) with ESP-TLS** section in the :doc:`ESP-TLS documentation </api-reference/protocols/esp_tls>` for more details. The secure element support has to be first enabled in menuconfig through :ref:`CONFIG_ESP_TLS_USE_SECURE_ELEMENT`. Then the HTTP client can be configured to use secure element as follows:
 
-    A secure element (ATECC608) can be also used for the underlying TLS connection in the HTTP client connection. Please refer to the **ATECC608A (Secure Element) with ESP-TLS** section in the :doc:`ESP-TLS documentation </api-reference/protocols/esp_tls>` for more details. The secure element support has to be first enabled in menuconfig through :ref:`CONFIG_ESP_TLS_USE_SECURE_ELEMENT`. Then the HTTP client can be configured to use secure element as follows:
+.. code-block:: c
 
-    .. code-block:: c
-
-        esp_http_client_config_t cfg = {
-            /* other configurations options */
-            .use_secure_element = true,
-        };
+    esp_http_client_config_t cfg = {
+        /* other configurations options */
+        .use_secure_element = true,
+    };
 
 
 HTTPS Request

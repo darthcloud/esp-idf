@@ -48,7 +48,7 @@ Virtual Memory Capabilities
 
 .. only:: esp32s2
 
-    4 MB external memory addresses (from 0x40400000 to 0x40800000) which have the :cpp:enumerator:`MMU_MEM_CAP_EXEC` and :cpp:enumerator:`MMU_MEM_CAP_READ` capabilities are not avaiable for users to allocate, due to hardware limitations.
+    4 MB external memory addresses (from 0x40400000 to 0x40800000) which have the :cpp:enumerator:`MMU_MEM_CAP_EXEC` and :cpp:enumerator:`MMU_MEM_CAP_READ` capabilities are not available for users to allocate, due to hardware limitations.
 
 
 You can call :cpp:func:`esp_mmu_map_get_max_consecutive_free_block_size` to know the largest consecutive mappable block size with certain capabilities.
@@ -169,7 +169,9 @@ SPI flash can be accessed by SPI1 (ESP-IDF ``esp_flash`` driver APIs), or by poi
 Thread Safety
 =============
 
-APIs in ``esp_mmu_map.h`` are not guaranteed to be thread-safe.
+Following APIs in ``esp_mmu_map.h`` are not guaranteed to be thread-safe:
+
+- :cpp:func:`esp_mmu_map_dump_mapped_blocks`
 
 APIs in ``esp_cache.h`` are guaranteed to be thread-safe.
 

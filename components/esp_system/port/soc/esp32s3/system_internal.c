@@ -1,11 +1,12 @@
 
 /*
- * SPDX-FileCopyrightText: 2018-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2018-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <string.h>
+#include "esp_macros.h"
 #include "sdkconfig.h"
 #include "esp_system.h"
 #include "esp_private/system_internal.h"
@@ -52,8 +53,10 @@ void IRAM_ATTR esp_system_reset_modules_on_exit(void)
                       SYSTEM_PWM0_RST | SYSTEM_PWM1_RST);
     REG_WRITE(SYSTEM_PERIP_RST_EN0_REG, 0);
 
-    // Reset dma
-    SET_PERI_REG_MASK(SYSTEM_PERIP_RST_EN1_REG, SYSTEM_DMA_RST);
+    // Reset dma and crypto peripherals. This ensures a clean state for the crypto peripherals after a CPU restart
+    // and hence avoiding any possibility with crypto failure in ROM security workflows.
+    SET_PERI_REG_MASK(SYSTEM_PERIP_RST_EN1_REG, SYSTEM_DMA_RST | SYSTEM_CRYPTO_AES_RST | SYSTEM_CRYPTO_DS_RST |
+                      SYSTEM_CRYPTO_HMAC_RST | SYSTEM_CRYPTO_RSA_RST | SYSTEM_CRYPTO_SHA_RST);
     REG_WRITE(SYSTEM_PERIP_RST_EN1_REG, 0);
 
     SET_PERI_REG_MASK(SYSTEM_EDMA_CTRL_REG, SYSTEM_EDMA_RESET);
@@ -91,19 +94,15 @@ void IRAM_ATTR esp_restart_noos(void)
     wdt_hal_disable(&wdt1_context);
     wdt_hal_write_protect_enable(&wdt1_context);
 
-#ifdef CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+#ifdef CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
     if (esp_ptr_external_ram(esp_cpu_get_sp())) {
-        // If stack_addr is from External Memory (CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY is used)
+        // If stack_addr is from External Memory (CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM is used)
         // then need to switch SP to Internal Memory otherwise
         // we will get the "Cache disabled but cached memory region accessed" error after Cache_Read_Disable.
         uint32_t new_sp = ALIGN_DOWN(_bss_end, 16);
         SET_STACK(new_sp);
     }
 #endif
-
-    // Disable cache
-    Cache_Disable_ICache();
-    Cache_Disable_DCache();
 
     // Reset and stall the other CPU.
     // CPU must be reset before stalling, in case it was running a s32c1i
@@ -115,6 +114,10 @@ void IRAM_ATTR esp_restart_noos(void)
     esp_rom_software_reset_cpu(other_core_id);
     esp_cpu_stall(other_core_id);
 #endif
+
+    // Disable cache
+    Cache_Disable_ICache();
+    Cache_Disable_DCache();
 
     // 2nd stage bootloader reconfigures SPI flash signals.
     // Reset them to the defaults expected by ROM.
@@ -155,7 +158,6 @@ void IRAM_ATTR esp_restart_noos(void)
         esp_rom_software_reset_cpu(1);
     }
 #endif
-    while (true) {
-        ;
-    }
+
+    ESP_INFINITE_LOOP();
 }

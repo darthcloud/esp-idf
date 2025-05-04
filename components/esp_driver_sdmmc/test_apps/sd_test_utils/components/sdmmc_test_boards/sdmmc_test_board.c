@@ -1,12 +1,15 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #include "sdmmc_test_board.h"
 #include "sdkconfig.h"
+#include "unity.h"
 #include "soc/soc_caps.h"
+#include "sd_pwr_ctrl_by_on_chip_ldo.h"
+#include "sd_pwr_ctrl.h"
 
 const sdmmc_test_board_slot_info_t* sdmmc_test_board_get_slot_info(int slot_index)
 {
@@ -30,6 +33,9 @@ void sdmmc_test_board_get_config_sdmmc(int slot_index, sdmmc_host_t *out_host_co
     }
     if (slot->max_freq_khz > 0) {
         out_host_config->max_freq_khz = slot->max_freq_khz;
+    }
+    if (slot->uhs1_supported) {
+        out_slot_config->flags |= SDMMC_SLOT_FLAG_UHS1;
     }
 
 #if SOC_SDMMC_USE_GPIO_MATRIX

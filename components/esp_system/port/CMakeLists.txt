@@ -8,8 +8,8 @@ target_include_directories(${COMPONENT_LIB} PRIVATE ${INCLUDE_FILES} include/pri
 
 set(srcs "cpu_start.c" "panic_handler.c" "esp_system_chip.c")
 
-if(CONFIG_SOC_BOD_SUPPORTED)
-    list(APPEND srcs "brownout.c")
+if(NOT CONFIG_APP_BUILD_TYPE_PURE_RAM_APP)
+    list(APPEND srcs "image_process.c")
 endif()
 
 if(CONFIG_ESP_CONSOLE_USB_CDC)

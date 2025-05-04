@@ -23,6 +23,7 @@
 #define SOC_GDMA_SUPPORTED              1
 #define SOC_AHB_GDMA_SUPPORTED          1
 #define SOC_GPTIMER_SUPPORTED           1
+#define SOC_PHY_SUPPORTED               1
 #define SOC_BT_SUPPORTED                1
 #define SOC_WIFI_SUPPORTED              1
 #define SOC_ASYNC_MEMCPY_SUPPORTED      1
@@ -45,6 +46,10 @@
 #define SOC_WDT_SUPPORTED               1
 #define SOC_SPI_FLASH_SUPPORTED         1
 #define SOC_RNG_SUPPORTED               1
+#define SOC_LIGHT_SLEEP_SUPPORTED       1
+#define SOC_DEEP_SLEEP_SUPPORTED        1
+#define SOC_LP_PERIPH_SHARE_INTERRUPT   1   // LP peripherals sharing the same interrupt source
+#define SOC_PM_SUPPORTED                1
 
 /*-------------------------- XTAL CAPS ---------------------------------------*/
 #define SOC_XTAL_SUPPORT_26M            1
@@ -93,6 +98,7 @@
 #define SOC_CPU_CORES_NUM               (1U)
 #define SOC_CPU_INTR_NUM                32
 #define SOC_CPU_HAS_FLEXIBLE_INTC       1
+#define SOC_CPU_HAS_CSR_PC              1
 
 #define SOC_CPU_BREAKPOINTS_NUM             2
 #define SOC_CPU_WATCHPOINTS_NUM             2
@@ -129,12 +135,17 @@
 #define SOC_GPIO_OUT_RANGE_MAX          20
 
 #define SOC_GPIO_DEEP_SLEEP_WAKE_VALID_GPIO_MASK        (0ULL | BIT0 | BIT1 | BIT2 | BIT3 | BIT4 | BIT5)
+#define SOC_GPIO_DEEP_SLEEP_WAKE_SUPPORTED_PIN_CNT      (6)
 
 // digital I/O pad powered by VDD3P3_CPU or VDD_SPI(GPIO_NUM_6~GPIO_NUM_20)
 #define SOC_GPIO_VALID_DIGITAL_IO_PAD_MASK 0x00000000001FFFC0ULL
 
-// The Clock Out singnal is route to the pin by GPIO matrix
+// The Clock Out signal is route to the pin by GPIO matrix
 #define SOC_GPIO_CLOCKOUT_BY_GPIO_MATRIX    (1)
+#define SOC_GPIO_CLOCKOUT_CHANNEL_NUM       (3)
+
+// "RTC"_IOs and DIG_IOs can be hold during deep sleep and after waking up
+#define SOC_GPIO_SUPPORT_HOLD_IO_IN_DSLP (1)
 
 /*-------------------------- Dedicated GPIO CAPS -----------------------------*/
 #define SOC_DEDIC_GPIO_OUT_CHANNELS_NUM (8) /*!< 8 outward channels on each CPU core */
@@ -144,6 +155,7 @@
 /*-------------------------- I2C CAPS ----------------------------------------*/
 // ESP32-C2 has 1 I2C
 #define SOC_I2C_NUM                 (1U)
+#define SOC_HP_I2C_NUM              (1U)
 
 #define SOC_I2C_FIFO_LEN            (16) /*!< I2C hardware FIFO depth */
 #define SOC_I2C_CMD_REG_NUM         (8)  /*!< Number of I2C command registers */
@@ -158,6 +170,7 @@
 /*-------------------------- LEDC CAPS ---------------------------------------*/
 #define SOC_LEDC_SUPPORT_PLL_DIV_CLOCK  (1)
 #define SOC_LEDC_SUPPORT_XTAL_CLOCK     (1)
+#define SOC_LEDC_TIMER_NUM              (4)
 #define SOC_LEDC_CHANNEL_NUM            (6)
 #define SOC_LEDC_TIMER_BIT_WIDTH        (14)
 #define SOC_LEDC_SUPPORT_FADE_STOP      (1)
@@ -186,9 +199,6 @@
 /* No dedicated RTCIO subsystem on ESP32-C2. RTC functions are still supported
  * for hold, wake & 32kHz crystal functions - via rtc_cntl_reg */
 #define SOC_RTCIO_PIN_COUNT    (0U)
-
-/*--------------------------- RSA CAPS ---------------------------------------*/
-#define SOC_RSA_MAX_BIT_LEN    (3072)
 
 /*--------------------------- SHA CAPS ---------------------------------------*/
 
@@ -225,6 +235,12 @@
 // Peripheral supports output given level during its "dummy phase"
 #define SOC_SPI_PERIPH_SUPPORT_CONTROL_DUMMY_OUT 1
 
+#define SOC_SPI_SCT_SUPPORTED                     1
+#define SOC_SPI_SCT_SUPPORTED_PERIPH(PERIPH_NUM)  ((PERIPH_NUM==1) ? 1 : 0)    //Support Segmented-Configure-Transfer
+#define SOC_SPI_SCT_REG_NUM                       14
+#define SOC_SPI_SCT_BUFFER_NUM_MAX                (1 + SOC_SPI_SCT_REG_NUM)  //1-word-bitmap + 14-word-regs
+#define SOC_SPI_SCT_CONF_BITLEN_MAX               0x3FFFA       //18 bits wide reg
+
 #define SOC_MEMSPI_IS_INDEPENDENT 1
 #define SOC_SPI_MAX_PRE_DIVIDER 16
 
@@ -258,6 +274,10 @@
 #define SOC_TIMER_GROUP_SUPPORT_XTAL      (1)
 #define SOC_TIMER_GROUP_TOTAL_TIMERS      (1U)
 
+/*-------------------------- LP_TIMER CAPS ----------------------------------*/
+#define SOC_LP_TIMER_BIT_WIDTH_LO           32 // Bit width of lp_timer low part
+#define SOC_LP_TIMER_BIT_WIDTH_HI           16 // Bit width of lp_timer high part
+
 /*--------------------------- WATCHDOG CAPS ---------------------------------------*/
 #define SOC_MWDT_SUPPORT_XTAL              (1)
 
@@ -282,7 +302,7 @@
 #define SOC_UART_NUM                (2)
 #define SOC_UART_HP_NUM             (2)
 #define SOC_UART_FIFO_LEN           (128)      /*!< The UART hardware FIFO length */
-#define SOC_UART_BITRATE_MAX        (5000000)  /*!< Max bit rate supported by UART */
+#define SOC_UART_BITRATE_MAX        (2500000)  /*!< Max bit rate supported by UART */
 #define SOC_UART_SUPPORT_WAKEUP_INT (1)         /*!< Support UART wakeup interrupt */
 #define SOC_UART_SUPPORT_PLL_F40M_CLK (1)   /*!< Support APB as the clock source */
 #define SOC_UART_SUPPORT_RTC_CLK    (1)     /*!< Support RTC clock as the clock source */
@@ -290,6 +310,11 @@
 
 // UART has an extra TX_WAIT_SEND state when the FIFO is not empty and XOFF is enabled
 #define SOC_UART_SUPPORT_FSM_TX_WAIT_SEND   (1)
+
+#define SOC_UART_WAKEUP_SUPPORT_ACTIVE_THRESH_MODE (1)
+
+/*-------------------------- COEXISTENCE CAPS -------------------------------*/
+#define SOC_SUPPORT_COEXISTENCE     (1)
 
 /*-------------------------- COEXISTENCE HARDWARE PTI CAPS -------------------------------*/
 #define SOC_COEX_HW_PTI                 (1)
@@ -317,10 +342,13 @@
 
 #define SOC_CLK_OSC_SLOW_SUPPORTED                (1)     /*!< ESP32C2 only supports to connect an external oscillator, not a crystal */
 
+#define SOC_CLK_LP_FAST_SUPPORT_XTAL_D2           (1)     /*!< Support XTAL_D2 clock as the LP_FAST clock source */
+
 /*------------------------------------ WI-FI CAPS ------------------------------------*/
 #define SOC_WIFI_HW_TSF                           (1)    /*!< Support hardware TSF */
 #define SOC_WIFI_FTM_SUPPORT                      (1)    /*!< Support FTM */
 #define SOC_WIFI_SUPPORT_VARIABLE_BEACON_WINDOW   (1)    /*!< Support delta early time for rf phy on/off */
+#define SOC_WIFI_PHY_NEEDS_USB_WORKAROUND         (1)    /*!< SoC has WiFi and USB PHYs interference, needs a workaround */
 
 /*---------------------------------- Bluetooth CAPS ----------------------------------*/
 #define SOC_BLE_SUPPORTED               (1)    /*!< Support Bluetooth Low Energy hardware */

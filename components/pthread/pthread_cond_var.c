@@ -17,6 +17,7 @@
 
 #include <sys/queue.h>
 #include <sys/time.h>
+#include <sys/lock.h>
 
 #include "esp_log.h"
 const static char *TAG = "esp_pthread";
@@ -127,7 +128,7 @@ int pthread_cond_timedwait(pthread_cond_t *cv, pthread_mutex_t *mut, const struc
             timersub(&abs_time, &cur_time, &diff_time);
             // Round up timeout microseconds to the next millisecond
             timeout_msec = (diff_time.tv_sec * 1000) +
-                ((diff_time.tv_usec + 1000 - 1) / 1000);
+                           ((diff_time.tv_usec + 1000 - 1) / 1000);
         }
 
         if (timeout_msec <= 0) {
